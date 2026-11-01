@@ -14,11 +14,14 @@
 </p>
 
 <p align="center">
+  <a href="https://upstar.dev/r/yjid/kensaku"><img alt="Upstar trending" src="https://upstar.dev/badge/yjid/kensaku.svg" /></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/yjid/kensaku/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/yjid/kensaku?style=for-the-badge" /></a>
   <a href="https://github.com/yjid/kensaku/releases/latest"><img alt="Downloads" src="https://img.shields.io/github/downloads/yjid/kensaku/total?style=for-the-badge" /></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-111111?style=for-the-badge" /></a>
   <a href="https://github.com/yjid/kensaku/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/yjid/kensaku/ci.yml?branch=master&style=for-the-badge" /></a>
-  <a href="https://upstar.dev/r/yjid/kensaku"><img alt="Upstar trending" src="https://upstar.dev/badge/yjid/kensaku.svg" /></a>
 </p>
 
 <p align="center">
