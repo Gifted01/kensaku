@@ -48,7 +48,11 @@ pub fn parse_query(
         if let Token::Word(text) = &token
             && let Some(distance) = parse_near_token(text)
         {
-            pending_near = Some(distance);
+            let clamped = distance.min(NEAR_MAX_DISTANCE);
+            if clamped != distance {
+                hints.push(format!("near[{distance}] clamped to {NEAR_MAX_DISTANCE}"));
+            }
+            pending_near = Some(clamped);
             is_first_token = false;
             continue;
         }
@@ -161,7 +165,11 @@ pub fn parse_query(
                 match key_lower.as_str() {
                     "near" => {
                         if let Ok(distance) = value.parse::<u32>() {
-                            pending_near = Some(distance);
+                            let clamped = distance.min(NEAR_MAX_DISTANCE);
+                            if clamped != distance {
+                                hints.push(format!("near:{distance} clamped to {NEAR_MAX_DISTANCE}"));
+                            }
+                            pending_near = Some(clamped);
                             continue;
                         }
                         hints.push(format!(
@@ -544,6 +552,11 @@ fn parse_size_range(val: &str) -> Option<RangeOp> {
     Some(RangeOp::Between(size.saturating_sub(1024), size + 1024))
 }
 
+/// Maximum bound for a `near[x]` distance. Sloppier phrases beyond this are
+/// closer to "anywhere in the document" than "within N words"; clamping keeps
+/// phrase queries meaningful and matches the documented behavior.
+pub const NEAR_MAX_DISTANCE: u32 = 100;
+
 fn parse_near_token(text: &str) -> Option<u32> {
     let lower = text.to_ascii_lowercase();
     let rest = lower.strip_prefix("near")?;
@@ -734,6 +747,37 @@ mod tests {
         let query = parse("mouse near:5 button");
         assert_eq!(query.terms, vec![term("mouse"), term("button")]);
         assert_eq!(query.proximity, vec![(0, 1, 5)]);
+    }
+
+    #[test]
+    fn near_distance_above_max_is_clamped_with_a_hint() {
+        let query = parse("mouse near[5000] button");
+        assert_eq!(query.proximity, vec![(0, 1, 100)]);
+        assert!(query.hints.iter().any(|h| h.contains("clamped to 100")));
+
+        let query = parse("mouse near:5000 button");
+        assert_eq!(query.proximity, vec![(0, 1, 100)]);
+        assert!(query.hints.iter().any(|h| h.contains("clamped to 100")));
+    }
+
+    #[test]
+    fn near_distance_at_max_is_not_clamped() {
+        let query = parse("mouse near[100] button");
+        assert_eq!(query.proximity, vec![(0, 1, 100)]);
+        assert!(
+            !query.hints.iter().any(|h| h.contains("clamped")),
+            "boundary value must not emit a clamp hint, got {:?}",
+            query.hints
+        );
+    }
+
+    #[test]
+    fn duplicate_near_hint_text_differs_for_filter_form() {
+        let query = parse("near:900 mouse");
+        assert!(query
+            .hints
+            .iter()
+            .any(|h| h.contains("near:900 clamped to 100")));
     }
 
     #[test]

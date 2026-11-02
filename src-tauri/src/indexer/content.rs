@@ -1,4 +1,5 @@
 use crate::query::ast::RangeOp;
+use crate::query::parser::NEAR_MAX_DISTANCE;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -232,6 +233,7 @@ pub fn rewrite_near_in_group(input: &str) -> String {
         }
         i = j;
         if bound && terms.len() >= 2 {
+            let slop = slop.min(NEAR_MAX_DISTANCE);
             out.push(format!("\"{}\"~{}", terms.join(" "), slop));
         } else {
             out.extend(terms);
@@ -1479,6 +1481,11 @@ mod tests {
         // Dangling/leading operators are dropped, never emitted as terms.
         assert_eq!(rewrite_near_in_group("mouse near[5]"), "mouse");
         assert_eq!(rewrite_near_in_group("near[5] mouse"), "mouse");
+        // Chain slop is clamped to the documented maximum.
+        assert_eq!(
+            rewrite_near_in_group("a near[60] b near[60] c"),
+            "\"a b c\"~100"
+        );
         // Plain tokens still pass through sanitization.
         assert_eq!(rewrite_near_in_group("a near[1] c++"), "\"a c\"~1");
     }
