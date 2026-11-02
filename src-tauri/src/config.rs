@@ -253,6 +253,10 @@ fn default_content_max_semantic_units() -> usize {
 }
 
 fn default_theme() -> String {
+    // The config default and the inline pre-paint script in index.html must
+    // agree on this: if both storage and matchMedia fail, the first frame
+    // paints dark. Fresh installs otherwise follow the OS (see useTheme.ts
+    // and #72); the frontend owns first-run resolution.
     "dark".to_string()
 }
 
