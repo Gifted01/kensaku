@@ -184,4 +184,96 @@ mod tests {
         let hits = ExactScanner::scan_with_model(&query, &store, None, 10, Some(3));
         assert!(hits.is_empty());
     }
+    // ── Additional coverage ───────────────────────────────────────────────────
+
+    #[test]
+    fn limit_is_respected_when_many_nodes_match() {
+        // Create 10 nodes that all perfectly match the query vector.
+        let mut store = UnitStore::new(4);
+        for node_id in 1u64..=10 {
+            store.add_unit(unit(node_id, node_id), &[127i8, 0, 0, 0]);
+        }
+        let query = [127i8, 0, 0, 0];
+        let hits = ExactScanner::scan(&query, &store, None, 5);
+        assert_eq!(hits.len(), 5, "limit must cap results to 5");
+    }
+
+    #[test]
+    fn results_are_ordered_by_score_descending() {
+        let mut store = UnitStore::new(4);
+        // node 1: perfect match for [127,0,0,0].
+        store.add_unit(unit(0, 1), &[127i8, 0, 0, 0]);
+        // node 2: partial match.
+        store.add_unit(unit(1, 2), &[100i8, 50, 0, 0]);
+        // node 3: weaker match.
+        store.add_unit(unit(2, 3), &[60i8, 60, 60, 0]);
+
+        let query = [127i8, 0, 0, 0];
+        let hits = ExactScanner::scan(&query, &store, None, 10);
+
+        // Must be sorted descending by score.
+        for window in hits.windows(2) {
+            assert!(
+                window[0].score >= window[1].score,
+                "results not in descending score order"
+            );
+        }
+        // Perfect match must be first.
+        assert_eq!(hits[0].node_id, 1);
+    }
+
+    #[test]
+    fn score_threshold_filters_low_similarity_units() {
+        let mut store = UnitStore::new(4);
+        // node 1: perfectly orthogonal to the query — similarity ~0, below 0.05 threshold.
+        store.add_unit(unit(0, 1), &[0i8, 127, 0, 0]);
+        // node 2: strongly aligned.
+        store.add_unit(unit(1, 2), &[127i8, 0, 0, 0]);
+
+        let query = [127i8, 0, 0, 0];
+        let hits = ExactScanner::scan(&query, &store, None, 10);
+
+        // node 1 has cosine ≈ 0 with [127,0,0,0] so it should be filtered.
+        assert!(
+            hits.iter().all(|h| h.node_id != 1),
+            "node 1 should be filtered by the 0.05 score threshold"
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].node_id, 2);
+    }
+
+    #[test]
+    fn dim_mismatch_returns_empty() {
+        let mut store = UnitStore::new(4);
+        store.add_unit(unit(0, 1), &[127i8, 0, 0, 0]);
+
+        // query vec length 3 ≠ store.dim 4
+        let query = [127i8, 0, 0];
+        let hits = ExactScanner::scan(&query, &store, None, 10);
+        assert!(hits.is_empty(), "dim mismatch must return empty");
+    }
+
+    #[test]
+    fn empty_store_returns_empty() {
+        let store = UnitStore::new(4);
+        let query = [127i8, 0, 0, 0];
+        let hits = ExactScanner::scan(&query, &store, None, 10);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn allowed_filter_with_no_matches_returns_empty() {
+        let mut store = UnitStore::new(4);
+        store.add_unit(unit(0, 1), &[127i8, 0, 0, 0]);
+        store.add_unit(unit(1, 2), &[127i8, 0, 0, 0]);
+
+        // allowed set contains node 99 which isn't in the store.
+        let allowed: HashSet<u64> = [99u64].into_iter().collect();
+        let hits = ExactScanner::scan(&query_vec(), &store, Some(&allowed), 10);
+        assert!(hits.is_empty());
+    }
+
+    fn query_vec() -> [i8; 4] {
+        [127i8, 0, 0, 0]
+    }
 }

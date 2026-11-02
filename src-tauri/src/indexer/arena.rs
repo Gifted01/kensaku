@@ -466,3 +466,240 @@ impl IdIndex {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ── NameArena ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn name_arena_push_and_get_round_trips() {
+        let mut a = NameArena::new();
+        let (off, len) = a.push("hello");
+        assert_eq!(a.get(off, len), "hello");
+        let (off2, len2) = a.push("world");
+        assert_eq!(a.get(off2, len2), "world");
+        // First entry must still be intact.
+        assert_eq!(a.get(off, len), "hello");
+    }
+
+    #[test]
+    fn name_arena_empty_push() {
+        let mut a = NameArena::new();
+        let (off, len) = a.push("");
+        assert_eq!(a.get(off, len), "");
+        assert_eq!(a.len(), 0);
+    }
+
+    #[test]
+    fn name_arena_oob_get_returns_empty() {
+        let a = NameArena::new();
+        // offset + len beyond buffer → empty string.
+        assert_eq!(a.get(0, 10), "");
+    }
+
+    #[test]
+    fn name_arena_unicode_round_trips() {
+        let mut a = NameArena::new();
+        let s = "日本語ファイル.txt";
+        let (off, len) = a.push(s);
+        assert_eq!(a.get(off, len), s);
+    }
+
+    // ── NodeArena ─────────────────────────────────────────────────────────────
+
+    fn node(parent: NodeId, name: &str, is_dir: bool, arena: &mut NodeArena) -> u32 {
+        let (name_off, name_len) = arena.names.push(name);
+        let n = Node {
+            parent,
+            name_off,
+            name_len,
+            ext_id: 0,
+            flags: if is_dir { Node::FLAG_DIR } else { 0 },
+            size: 0,
+            mtime: 0,
+            dev: 0,
+            ino: 0,
+            char_bloom: 0,
+            node_id: 0,
+        };
+        arena.push(n)
+    }
+
+    #[test]
+    fn node_flags_dir_and_content_pending() {
+        let mut n = Node {
+            parent: NO_PARENT,
+            name_off: 0,
+            name_len: 0,
+            ext_id: 0,
+            flags: 0,
+            size: 0,
+            mtime: 0,
+            dev: 0,
+            ino: 0,
+            char_bloom: 0,
+            node_id: 0,
+        };
+        assert!(!n.is_dir());
+        assert!(!n.content_pending());
+
+        n.set_dir(true);
+        assert!(n.is_dir());
+        assert!(!n.content_pending());
+
+        n.set_content_pending(true);
+        assert!(n.content_pending());
+
+        n.set_dir(false);
+        assert!(!n.is_dir());
+        assert!(n.content_pending()); // content flag survives clearing dir flag
+
+        n.set_content_pending(false);
+        assert!(!n.content_pending());
+    }
+
+    #[test]
+    fn node_arena_path_reconstruction() {
+        let mut arena = NodeArena::new();
+        let root = node(NO_PARENT, "home", true, &mut arena);
+        let user = node(root, "alice", true, &mut arena);
+        let file = node(user, "notes.txt", false, &mut arena);
+
+        let path = arena.path(file);
+        assert_eq!(path, Path::new("home/alice/notes.txt"));
+    }
+
+    #[test]
+    fn node_arena_path_eq_matches_correctly() {
+        let mut arena = NodeArena::new();
+        let root = node(NO_PARENT, "home", true, &mut arena);
+        let user = node(root, "alice", true, &mut arena);
+        let file = node(user, "doc.pdf", false, &mut arena);
+
+        assert!(arena.path_eq(file, Path::new("home/alice/doc.pdf")));
+        assert!(!arena.path_eq(file, Path::new("home/alice/other.pdf")));
+        assert!(!arena.path_eq(file, Path::new("home/doc.pdf")));
+    }
+
+    #[test]
+    fn node_arena_intern_ext_deduplicates() {
+        let mut arena = NodeArena::new();
+        let id1 = arena.intern_ext(Some("rs"));
+        let id2 = arena.intern_ext(Some("rs"));
+        let id3 = arena.intern_ext(Some("toml"));
+        assert_eq!(id1, id2, "same extension must get same id");
+        assert_ne!(id1, id3);
+        // No extension → id 0.
+        assert_eq!(arena.intern_ext(None), 0);
+        assert_eq!(arena.intern_ext(Some("")), 0);
+    }
+
+    #[test]
+    fn node_arena_extension_lookup() {
+        let mut arena = NodeArena::new();
+        let rs_id = arena.intern_ext(Some("rs"));
+        let (name_off, name_len) = arena.names.push("main.rs");
+        let idx = arena.push(Node {
+            parent: NO_PARENT,
+            name_off,
+            name_len,
+            ext_id: rs_id,
+            flags: 0,
+            size: 0,
+            mtime: 0,
+            dev: 0,
+            ino: 0,
+            char_bloom: 0,
+            node_id: 0,
+        });
+        assert_eq!(arena.extension(idx), Some("rs".to_string()));
+        assert_eq!(arena.ext_str(rs_id), "rs");
+        assert_eq!(arena.ext_str(0), "");
+    }
+
+    // ── IdIndex ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn id_index_insert_get_remove() {
+        let mut idx = IdIndex::new();
+        assert!(idx.is_empty());
+
+        idx.insert(10, 1);
+        idx.insert(20, 2);
+        idx.insert(30, 3);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.get(10), Some(1));
+        assert_eq!(idx.get(20), Some(2));
+        assert_eq!(idx.get(99), None);
+
+        idx.remove(20);
+        assert_eq!(idx.len(), 2);
+        assert_eq!(idx.get(20), None);
+        assert_eq!(idx.get(10), Some(1));
+    }
+
+    #[test]
+    fn id_index_update_existing_id() {
+        let mut idx = IdIndex::new();
+        idx.insert(5, 100);
+        idx.insert(5, 200); // update
+        assert_eq!(idx.get(5), Some(200));
+        assert_eq!(idx.len(), 1);
+    }
+
+    #[test]
+    fn id_index_from_pairs_is_sorted() {
+        let pairs = vec![(30u64, 3u32), (10, 1), (20, 2)];
+        let idx = IdIndex::from_pairs(pairs);
+        assert_eq!(idx.get(10), Some(1));
+        assert_eq!(idx.get(20), Some(2));
+        assert_eq!(idx.get(30), Some(3));
+    }
+
+    // ── PathIndex ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn path_index_insert_find_remove() {
+        let mut arena = NodeArena::new();
+        let root = node(NO_PARENT, "home", true, &mut arena);
+        let file = node(root, "a.txt", false, &mut arena);
+        let path = arena.path(file);
+
+        let mut pidx = PathIndex::new();
+        assert!(pidx.find(&arena, &path).is_none());
+
+        pidx.insert(&arena, &path, file);
+        assert_eq!(pidx.find(&arena, &path), Some(file));
+        assert_eq!(pidx.len(), 1);
+
+        let removed = pidx.remove(&arena, &path);
+        assert_eq!(removed, Some(file));
+        assert_eq!(pidx.len(), 0);
+        assert!(pidx.find(&arena, &path).is_none());
+    }
+
+    #[test]
+    fn path_index_update_existing_path() {
+        let mut arena = NodeArena::new();
+        let root = node(NO_PARENT, "home", true, &mut arena);
+        let old = node(root, "x.txt", false, &mut arena);
+        let new = node(root, "x.txt", false, &mut arena);
+        let path = arena.path(old);
+
+        let mut pidx = PathIndex::new();
+        pidx.insert(&arena, &path, old);
+        pidx.insert(&arena, &path, new); // overwrite
+        assert_eq!(pidx.find(&arena, &path), Some(new));
+        assert_eq!(pidx.len(), 1);
+    }
+
+    #[test]
+    fn path_hash_is_deterministic() {
+        let p = Path::new("home/alice/notes.txt");
+        assert_eq!(path_hash(p), path_hash(p));
+        assert_ne!(path_hash(p), path_hash(Path::new("home/bob/notes.txt")));
+    }
+}

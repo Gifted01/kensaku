@@ -200,3 +200,44 @@ impl SmartEmbedder {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // These tests exercise the stub that is compiled when the `smart-embeddings`
+    // feature is OFF (the default in `cargo test`). The stub must never panic
+    // and must return sentinels that callers can detect.
+
+    #[test]
+    fn load_always_returns_none_without_feature() {
+        // A non-existent directory is fine — the stub returns None regardless.
+        let result = SmartEmbedder::load(Path::new("/tmp/no-such-model-dir"));
+        assert!(
+            result.is_none(),
+            "SmartEmbedder::load must be None without smart-embeddings feature"
+        );
+    }
+
+    #[test]
+    fn embed_returns_empty_without_feature() {
+        // We can only call embed on a value we construct. With the feature off
+        // SmartEmbedder is a unit struct, so just build one directly.
+        let e = SmartEmbedder;
+        assert!(e.embed("hello world").is_empty());
+    }
+
+    #[test]
+    fn embed_f32_returns_empty_without_feature() {
+        let e = SmartEmbedder;
+        assert!(e.embed_f32("hello world").is_empty());
+    }
+
+    #[test]
+    fn embed_empty_text_is_empty_without_feature() {
+        let e = SmartEmbedder;
+        assert!(e.embed("").is_empty());
+        assert!(e.embed_f32("").is_empty());
+    }
+}

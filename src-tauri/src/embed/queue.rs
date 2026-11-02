@@ -279,3 +279,53 @@ fn fnv_hash(data: &str) -> u64 {
     }
     h
 }
+
+#[cfg(test)]
+mod tests {
+    use super::fnv_hash;
+
+    /// FNV-1a offset basis is the hash of the empty string.
+    #[test]
+    fn fnv_hash_empty_string_is_offset_basis() {
+        assert_eq!(fnv_hash(""), 0xcbf29ce484222325u64);
+    }
+
+    /// The hash is deterministic: two calls with the same input produce the
+    /// same output.
+    #[test]
+    fn fnv_hash_is_deterministic() {
+        let h1 = fnv_hash("hello kensaku");
+        let h2 = fnv_hash("hello kensaku");
+        assert_eq!(h1, h2);
+    }
+
+    /// Different strings must (in the overwhelming majority of cases) produce
+    /// different hashes.
+    #[test]
+    fn fnv_hash_differs_for_different_inputs() {
+        assert_ne!(fnv_hash("foo"), fnv_hash("bar"));
+        assert_ne!(fnv_hash("abc"), fnv_hash("ABC"));
+        assert_ne!(fnv_hash("a"), fnv_hash("b"));
+    }
+
+    /// Single-byte inputs can be verified manually against the FNV-1a spec.
+    /// FNV-1a("a") = (offset ^ 0x61) * prime
+    #[test]
+    fn fnv_hash_single_byte_matches_spec() {
+        const OFFSET: u64 = 0xcbf29ce484222325;
+        const PRIME: u64 = 0x100000001b3;
+        // Correct FNV-1a order: h = (h XOR byte) * prime
+        let expected = (OFFSET ^ b'a' as u64).wrapping_mul(PRIME);
+        assert_eq!(fnv_hash("a"), expected);
+    }
+
+    /// Hash of "hello" is stable across builds (regression guard).
+    #[test]
+    fn fnv_hash_hello_is_stable() {
+        // Computed independently: echo -n hello | python3 -c
+        //   "import sys; h=0xcbf29ce484222325; p=0x100000001b3
+        //    [h:=((h^b)*p)&0xFFFFFFFFFFFFFFFF for b in sys.stdin.buffer.read()]
+        //    print(hex(h))"
+        assert_eq!(fnv_hash("hello"), 0xa430d84680aabd0bu64);
+    }
+}
