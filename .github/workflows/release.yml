@@ -138,6 +138,34 @@ jobs:
       - name: Build bundles
         run: bunx tauri build ${{ matrix.args }}
 
+      # Portable build: the raw exe plus a `portable` marker file so
+      # KensakuConfig::config_dir keeps everything (config, metadata DB,
+      # content index, thumbs, OCR state) in <exe_dir>/data — no registry,
+      # no %APPDATA%. The zip is the artifact #68 asks for.
+      - name: Zip Windows portable build
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path "dist\portable" | Out-Null
+          Copy-Item "src-tauri\target\release\kensaku.exe" "dist\portable\kensaku.exe"
+          Set-Content -Path "dist\portable\portable" -Value "" -NoNewline -Encoding ascii
+          @'
+          Kensaku portable
+          ================
+          Run kensaku.exe. Configuration, the index and all data live in
+          the `data` folder next to the exe; nothing is written to the
+          registry or %APPDATA%. Keep the `portable` marker file in place,
+          or Kensaku falls back to the user profile directory.
+
+          The folder must be writable. Requires the system WebView2
+          runtime, preinstalled on Windows 10 1803+ and Windows 11.
+          '@ | Set-Content -Path "dist\portable\README.txt"
+          Compress-Archive -Path "dist\portable\*" -DestinationPath "dist\kensaku-portable-$version-x64.zip" -Force
+          Remove-Item -Recurse -Force "dist\portable"
+          $zip = Get-ChildItem "dist\kensaku-portable-$version-x64.zip"
+          Write-Output "staged $($zip.Name) ($([math]::Round($zip.Length / 1MB, 1)) MB)"
+
       - name: Upload bundles
         uses: actions/upload-artifact@v7
         with:
@@ -145,6 +173,7 @@ jobs:
           path: |
             src-tauri/target/release/bundle/**
             src-tauri/target/*/release/bundle/**
+            dist/kensaku-portable-*.zip
           if-no-files-found: error
 
   cli:
@@ -287,6 +316,7 @@ jobs:
           find artifacts -type f \
             \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
                -o -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \
+               -o -name 'kensaku-portable-*.zip' \
                -o -name 'kensaku-cli-*' \) \
             -exec cp -t release {} +
           test -n "$(find release -type f -print -quit)" || { echo "no release assets staged"; exit 1; }

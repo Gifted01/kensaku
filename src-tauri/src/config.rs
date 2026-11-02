@@ -221,6 +221,39 @@ fn default_app_mode() -> String {
     "launcher".to_string()
 }
 
+/// Pure core of [`KensakuConfig::config_dir`], kept out of the env-dependent
+/// wrapper so tests can exercise every precedence branch without mutating
+/// process env vars (which parallel test threads share).
+///
+/// - `env`: `KENSAKU_DATA_DIR` when set, `None` otherwise.
+/// - `exe_path`: `current_exe()` when resolvable, `None` otherwise.
+/// - `platform_default`: `dirs::config_dir()`, allowed to be `None` on
+///   exotic platforms, in which case a relative fallback is used.
+fn resolve_config_dir(
+    env: Option<&std::ffi::OsStr>,
+    exe_path: Option<&std::path::Path>,
+    platform_default: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(dir) = env
+        && !dir.is_empty()
+        && !dir
+            .to_str()
+            .is_some_and(|text| text.trim().is_empty())
+    {
+        return PathBuf::from(dir);
+    }
+    if let Some(exe_dir) = exe_path.and_then(std::path::Path::parent)
+        && (exe_dir.join("portable").is_file() || exe_dir.join("kensaku.portable").is_file())
+    {
+        return exe_dir.join("data");
+    }
+    if let Some(config_dir) = platform_default {
+        config_dir.join("kensaku")
+    } else {
+        PathBuf::from(".kensaku")
+    }
+}
+
 fn default_semantic_model() -> String {
     "static".to_string()
 }
@@ -425,22 +458,9 @@ impl KensakuConfig {
     ///    sits next to the executable, everything lives in `<exe_dir>/data`.
     /// 3. The platform default (`~/.config/kensaku`, `%APPDATA%\\kensaku`, …).
     pub fn config_dir() -> PathBuf {
-        if let Some(dir) = std::env::var_os("KENSAKU_DATA_DIR")
-            && !dir.is_empty()
-        {
-            return PathBuf::from(dir);
-        }
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-            && (dir.join("portable").is_file() || dir.join("kensaku.portable").is_file())
-        {
-            return dir.join("data");
-        }
-        if let Some(config_dir) = dirs::config_dir() {
-            config_dir.join("kensaku")
-        } else {
-            PathBuf::from(".kensaku")
-        }
+        let env_dir = std::env::var_os("KENSAKU_DATA_DIR");
+        let exe_path = std::env::current_exe().ok();
+        resolve_config_dir(env_dir.as_deref(), exe_path.as_deref(), dirs::config_dir())
     }
 
     pub fn config_path() -> PathBuf {
@@ -721,6 +741,87 @@ mod tests {
         assert!(cfg.skip_hidden);
         assert!(cfg.ocr_enabled);
         assert_eq!(cfg.theme, "dark");
+    }
+
+    fn write_marker(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, b"").unwrap();
+        path
+    }
+
+    #[test]
+    fn config_dir_env_var_wins_over_everything() {
+        let marker_dir = temp_dir("marker");
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        write_marker(&marker_dir, "portable");
+        let default = PathBuf::from("/platform/default");
+
+        let resolved = resolve_config_dir(
+            Some(std::ffi::OsStr::new("/override/data")),
+            Some(&marker_dir),
+            Some(default),
+        );
+        assert_eq!(resolved, PathBuf::from("/override/data"));
+    }
+
+    #[test]
+    fn config_dir_empty_env_var_is_ignored() {
+        let resolved = resolve_config_dir(
+            Some(std::ffi::OsStr::new("  ")),
+            None,
+            Some(std::env::temp_dir()),
+        );
+        assert_eq!(
+            resolved,
+            std::env::temp_dir().join("kensaku"),
+            "an empty/whitespace KENSAKU_DATA_DIR must not become an empty relative path"
+        );
+    }
+
+    #[test]
+    fn portable_marker_file_puts_data_next_to_the_exe() {
+        let exe_dir = temp_dir("portable");
+        write_marker(&exe_dir, "portable");
+        let resolved = resolve_config_dir(None, Some(&exe_dir.join("kensaku.exe")), None);
+        assert_eq!(resolved, exe_dir.join("data"));
+    }
+
+    #[test]
+    fn kensaku_portable_marker_file_also_deployed() {
+        let exe_dir = temp_dir("portable2");
+        write_marker(&exe_dir, "kensaku.portable");
+        let resolved = resolve_config_dir(None, Some(&exe_dir.join("kensaku.exe")), None);
+        assert_eq!(resolved, exe_dir.join("data"));
+    }
+
+    #[test]
+    fn portable_marker_directory_named_portable_is_not_a_marker() {
+        // `portable` must be a FILE; a directory of that name (someone's
+        // folder layout) must not silently redirect data storage.
+        let exe_dir = temp_dir("marker-dir");
+        std::fs::create_dir_all(exe_dir.join("portable")).unwrap();
+        let resolved = resolve_config_dir(
+            None,
+            Some(&exe_dir.join("kensaku.exe")),
+            Some(std::env::temp_dir()),
+        );
+        assert_eq!(resolved, std::env::temp_dir().join("kensaku"));
+    }
+
+    #[test]
+    fn no_env_no_marker_uses_platform_default() {
+        let resolved = resolve_config_dir(
+            None,
+            Some(&std::env::temp_dir().join("kensaku.exe")),
+            Some(std::env::temp_dir()),
+        );
+        assert!(resolved.ends_with("kensaku"));
+    }
+
+    #[test]
+    fn missing_platform_default_falls_back_relative() {
+        let resolved = resolve_config_dir(None, None, None);
+        assert_eq!(resolved, PathBuf::from(".kensaku"));
     }
 
     #[test]

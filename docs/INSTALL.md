@@ -11,7 +11,7 @@ Download from [Releases](https://github.com/yjid/kensaku/releases).
 | Linux | `kensaku-<ver>-1.x86_64.rpm` | `sudo rpm -i kensaku-*.rpm` |
 | macOS | `Kensaku_<ver>_universal.dmg` | Intel + Apple Silicon |
 | Windows | `Kensaku_<ver>_x64_en-US.msi` | per-user install |
-| Windows | `kensaku.exe` | portable |
+| Windows | `kensaku-portable-<ver>-x64.zip` | portable: unzip in a writable folder, run `kensaku.exe`; config/index/data live in `data\` next to the exe, nothing in `%APPDATA%`. Keeps the `portable` marker file in place. |
 
 ### The builds are unsigned
 
