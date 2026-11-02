@@ -31,6 +31,7 @@
   <a href="#performance">Performance</a> ·
   <a href="#connect-ai-agents-mcp">MCP</a> ·
   <a href="docs/USAGE.md">Docs</a> ·
+  <a href="docs/LANGUAGES.md">Languages</a> ·
   <a href="#contributing">Contribute</a>
 </p>
 
@@ -121,7 +122,7 @@ name:resume               content:"timeout"         re:"fn \w+_test"
 -draft                    mode:exhaustive
 ```
 
-Full reference: [docs/USAGE.md](docs/USAGE.md).
+Full reference: [docs/USAGE.md](docs/USAGE.md) · Language & format support: [docs/LANGUAGES.md](docs/LANGUAGES.md).
 
 ## Install
 
