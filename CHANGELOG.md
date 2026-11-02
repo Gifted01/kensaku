@@ -3,6 +3,22 @@
 All notable changes to Kensaku. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/).
 
+## [1.0.12] — 2026-11-02
+
+### Added
+- `mouse near[5] button`: the `near[x]` proximity operator matches files
+  where the terms sit within `x` words of each other. Chains
+  (`a near[3] b near[2] c`) and the `near:5` filter form work too; the
+  fuzzy, semantic and visual tiers are skipped for such queries because
+  word distance is a lexical constraint embeddings cannot honor.
+- The data directory is overridable: `KENSAKU_DATA_DIR` (tests, Nix /
+  Flatpak-style packaging) has highest precedence, then a `portable` or
+  `kensaku.portable` marker file next to the executable keeps everything
+  in `<exe_dir>/data` (the Windows portable build is now self-contained),
+  before the platform default (`~/.config/kensaku`, `%APPDATA%\kensaku`,
+  …). The metadata database no longer hardcodes one location and follows
+  the same resolution as every other data path (see `docs/CONFIG.md`).
+
 ## [1.0.11] — 2026-10-30
 
 ### Added
