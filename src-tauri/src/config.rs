@@ -412,7 +412,26 @@ impl Default for KensakuConfig {
 }
 
 impl KensakuConfig {
+    /// Resolves Kensaku's data/config directory.
+    ///
+    /// Precedence:
+    /// 1. `KENSAKU_DATA_DIR` env var (explicit override; used by tests and
+    ///    Nix/Flatpak/packagers).
+    /// 2. Portable mode: if a `portable` or `kensaku.portable` marker file
+    ///    sits next to the executable, everything lives in `<exe_dir>/data`.
+    /// 3. The platform default (`~/.config/kensaku`, `%APPDATA%\\kensaku`, …).
     pub fn config_dir() -> PathBuf {
+        if let Some(dir) = std::env::var_os("KENSAKU_DATA_DIR")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir);
+        }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+            && (dir.join("portable").is_file() || dir.join("kensaku.portable").is_file())
+        {
+            return dir.join("data");
+        }
         if let Some(config_dir) = dirs::config_dir() {
             config_dir.join("kensaku")
         } else {

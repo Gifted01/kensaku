@@ -5,6 +5,17 @@ Kensaku stores its settings in the OS config directory:
 - macOS: `~/Library/Application Support/kensaku/config.json`
 - Windows: `%APPDATA%\\kensaku\\config.json`
 
+Two overrides apply to this location (config file, metadata database, content
+index, OCR state, everything else under the data directory):
+
+1. **`KENSAKU_DATA_DIR`** environment variable. Highest precedence; useful for
+   tests and for Nix/Flatpak or other sandboxed packaging that must pin the
+   data directory.
+2. **Portable marker file.** If a file named `portable` (or `kensaku.portable`)
+   sits next to the executable, Kensaku keeps everything in `<exe_dir>/data`.
+   This makes the Windows portable build self-contained: copy the folder, keep
+   your index.
+
 The file is JSON (despite the `config.toml` shorthand used in docs). Keys are
 optional where noted; missing keys fall back to the listed default.
 

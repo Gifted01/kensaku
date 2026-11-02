@@ -1,3 +1,4 @@
+use crate::config::KensakuConfig;
 use crate::indexer::burst;
 use crate::indexer::walker::FileEntry;
 use parking_lot::Mutex;
@@ -31,9 +32,7 @@ impl MetadataDb {
     }
 
     pub fn open() -> Result<Self, String> {
-        let config_dir =
-            dirs::config_dir().ok_or_else(|| "Could not determine config directory".to_string())?;
-        let db_dir = config_dir.join("kensaku");
+        let db_dir = KensakuConfig::config_dir();
         std::fs::create_dir_all(&db_dir)
             .map_err(|e| format!("Failed to create metadata directory: {}", e))?;
 
