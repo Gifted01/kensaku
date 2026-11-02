@@ -2047,4 +2047,93 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn record_open_increments_count_and_updates_recency() {
+        let temp = TempDb::new("record-open");
+        let db = temp.db();
+        let path = Path::new("/path/to/doc.pdf");
+
+        // Record first open
+        db.record_open(path).expect("first record_open");
+        let usage = db.load_usage().expect("load_usage");
+        let &(count, last_opened) = usage.get(path).expect("path in usage");
+        assert_eq!(count, 1);
+        assert!(last_opened > 0);
+
+        // Record second open
+        db.record_open(path).expect("second record_open");
+        let usage2 = db.load_usage().expect("load_usage");
+        let &(count2, last_opened2) = usage2.get(path).expect("path in usage");
+        assert_eq!(count2, 2);
+        assert!(last_opened2 >= last_opened);
+    }
+
+    #[test]
+    fn upsert_remove_count_and_clear_cycle() {
+        let temp = TempDb::new("crud-cycle");
+        let db = temp.db();
+
+        assert_eq!(db.count().unwrap(), 0);
+
+        let p1 = Path::new("/data/a.txt");
+        let p2 = Path::new("/data/b.txt");
+        let id1 = db.upsert(&entry(p1, false)).expect("insert a");
+        let id2 = db.upsert(&entry(p2, false)).expect("insert b");
+        assert_eq!(db.count().unwrap(), 2);
+
+        // Lookup by path
+        assert_eq!(db.get_node_id_by_path(p1).unwrap(), Some(id1));
+        assert_eq!(db.get_node_id_by_path(p2).unwrap(), Some(id2));
+        assert_eq!(
+            db.get_node_id_by_path(Path::new("/not/found")).unwrap(),
+            None
+        );
+
+        // Remove single entry
+        db.remove(p1).expect("remove p1");
+        assert_eq!(db.count().unwrap(), 1);
+        assert_eq!(db.get_node_id_by_path(p1).unwrap(), None);
+        assert_eq!(db.get_node_id_by_path(p2).unwrap(), Some(id2));
+
+        // Clear all entries
+        db.clear().expect("clear db");
+        assert_eq!(db.count().unwrap(), 0);
+        assert_eq!(db.get_node_id_by_path(p2).unwrap(), None);
+    }
+
+    #[test]
+    fn unit_vectors_crud_and_reset_semantic_index() {
+        let temp = TempDb::new("units-crud");
+        let db = temp.db();
+
+        let node_id = db.upsert(&entry(Path::new("/file.txt"), false)).unwrap();
+        let vector: [i8; 4] = [10, -20, 30, -40];
+
+        // Insert unit
+        let unit_id = db
+            .insert_unit(node_id, 0, 100, 1, &vector)
+            .expect("insert unit");
+        assert!(unit_id > 0);
+
+        // Load units
+        let all_units = db.load_all_units().expect("load units");
+        assert_eq!(all_units.len(), 1);
+        assert_eq!(all_units[0].0.node_id, node_id);
+        assert_eq!(all_units[0].0.byte_start, 0);
+        assert_eq!(all_units[0].0.byte_end, 100);
+        assert_eq!(all_units[0].0.model_id, 1);
+        assert_eq!(all_units[0].1, vector);
+
+        // Delete units for node
+        db.delete_units_for_nodes(&[node_id]).expect("delete units");
+        let after_del = db.load_all_units().expect("load units after del");
+        assert!(after_del.is_empty());
+
+        // Insert again and test reset_semantic_index
+        db.insert_unit(node_id, 0, 50, 1, &vector).unwrap();
+        assert_eq!(db.load_all_units().unwrap().len(), 1);
+        db.reset_semantic_index().expect("reset semantic index");
+        assert!(db.load_all_units().unwrap().is_empty());
+    }
 }

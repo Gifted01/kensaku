@@ -249,4 +249,91 @@ mod tests {
         assert_eq!(tokens[0].offset_from, 0);
         assert_eq!(tokens[0].offset_to, 3);
     }
+
+    // ── Additional Tokenizer & CJK Coverage ───────────────────────────────────
+
+    #[test]
+    fn is_cjk_boundary_character_blocks() {
+        // Hangul Jamo
+        assert!(is_cjk('\u{1100}'));
+        assert!(is_cjk('\u{11FF}'));
+        // Hiragana
+        assert!(is_cjk('\u{3041}'));
+        assert!(is_cjk('\u{3096}'));
+        // Katakana
+        assert!(is_cjk('\u{30A1}'));
+        assert!(is_cjk('\u{30FA}'));
+        // Bopomofo
+        assert!(is_cjk('\u{3105}'));
+        assert!(is_cjk('\u{3129}'));
+        // CJK Unified Ideographs
+        assert!(is_cjk('\u{4E00}'));
+        assert!(is_cjk('\u{9FFF}'));
+        // Hangul Syllables
+        assert!(is_cjk('\u{AC00}'));
+        assert!(is_cjk('\u{D7AF}'));
+
+        // Non-CJK must return false
+        assert!(!is_cjk('a'));
+        assert!(!is_cjk('Z'));
+        assert!(!is_cjk('9'));
+        assert!(!is_cjk(' '));
+        assert!(!is_cjk('\n'));
+        assert!(!is_cjk('.'));
+        assert!(!is_cjk('α')); // Greek
+        assert!(!is_cjk('ж')); // Cyrillic
+        assert!(!is_cjk('é')); // Latin-1
+        assert!(!is_cjk('🦀')); // Emoji
+    }
+
+    #[test]
+    fn empty_and_whitespace_only_return_no_tokens() {
+        assert!(analyze("").is_empty());
+        assert!(analyze("   \t\r\n  ").is_empty());
+        assert!(analyze("!@#$%^&*()_+-=[]{}|;':\",.<>/?`~").is_empty());
+    }
+
+    #[test]
+    fn two_cjk_characters_emit_three_tokens() {
+        let tokens = analyze("東京");
+        let texts: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
+        // Unigram 1, Bigram, Unigram 2
+        assert_eq!(texts, vec!["東", "東京", "京"]);
+        assert_eq!(tokens[0].offset_from, 0);
+        assert_eq!(tokens[0].offset_to, 3);
+        assert_eq!(tokens[1].offset_from, 0);
+        assert_eq!(tokens[1].offset_to, 6);
+        assert_eq!(tokens[2].offset_from, 3);
+        assert_eq!(tokens[2].offset_to, 6);
+    }
+
+    #[test]
+    fn cjk_interleaved_with_latin_and_numbers() {
+        let tokens = analyze("第12回 Rust勉強会 2026年");
+        let texts: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
+        // "第", "12", "回", "rust", "勉", "勉強", "強", "強会", "会", "2026", "年"
+        assert_eq!(
+            texts,
+            vec![
+                "第", "12", "回", "rust", "勉", "勉強", "強", "強会", "会", "2026", "年"
+            ]
+        );
+    }
+
+    #[test]
+    fn tokens_exceeding_40_chars_are_filtered_by_analyzer() {
+        let short_word = "short";
+        let long_word = "a".repeat(45);
+        let text = format!("{} {}", short_word, long_word);
+        let tokens = analyze(&text);
+        let texts: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, vec!["short"]);
+    }
+
+    #[test]
+    fn latin_lowercasing_and_code_identifiers() {
+        let tokens = analyze("KENSAKU_SEARCH_ENGINE_V2");
+        let texts: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, vec!["kensaku", "search", "engine", "v2"]);
+    }
 }
