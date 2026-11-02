@@ -137,3 +137,175 @@ fn clean_text(s: &str) -> String {
         .trim()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A temp file that removes itself on drop.
+    struct Fixture(PathBuf);
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn bytes_fixture(tag: &str, bytes: &[u8]) -> Fixture {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "kensaku-text-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nanos
+        ));
+        fs::write(&path, bytes).unwrap();
+        Fixture(path)
+    }
+
+    #[test]
+    fn plain_utf8_extracts_trimmed() {
+        let fx = bytes_fixture("plain", b"  hello world \n");
+        assert_eq!(extract_text(&fx.0, 1000).as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn empty_file_and_whitespace_only_differ() {
+        let empty = bytes_fixture("empty", b"");
+        assert!(extract_text(&empty.0, 1000).is_none());
+
+        let blank = bytes_fixture("blank", b"   \n\n ");
+        assert_eq!(extract_text(&blank.0, 1000).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn utf16_le_and_be_bom_decode() {
+        // "héllo" in UTF-16, little-endian with BOM.
+        let le: Vec<u8> = [0xFF, 0xFE]
+            .iter()
+            .copied()
+            .chain("héllo".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let fx = bytes_fixture("utf16le", &le);
+        assert_eq!(extract_text(&fx.0, 1000).as_deref(), Some("héllo"));
+
+        // Same text big-endian with its own BOM.
+        let be: Vec<u8> = [0xFE, 0xFF]
+            .iter()
+            .copied()
+            .chain("héllo".encode_utf16().flat_map(u16::to_be_bytes))
+            .collect();
+        let fx = bytes_fixture("utf16be", &be);
+        assert_eq!(extract_text(&fx.0, 1000).as_deref(), Some("héllo"));
+    }
+
+    #[test]
+    fn utf16_bom_with_odd_trailing_byte_does_not_panic() {
+        // 3-byte body after the BOM: truncated UTF-16 unit.
+        let truncated: Vec<u8> = [0xFF, 0xFE, b'a', b'\0', b'b'].to_vec();
+        let fx = bytes_fixture("utf16odd", &truncated);
+        // Either decodes what it can of the full units or gives up; must not
+        // panic and must not index the raw BOM bytes as text.
+        let _ = extract_text(&fx.0, 1000);
+    }
+
+    #[test]
+    fn null_bytes_in_first_1k_reject_binary() {
+        let mut bytes = vec![b'>'; 10];
+        bytes[5] = 0;
+        let fx = bytes_fixture("binary-early", &bytes);
+        assert!(
+            extract_text(&fx.0, 1000).is_none(),
+            "null inside the binary-probe window"
+        );
+    }
+
+    #[test]
+    fn null_bytes_after_1k_are_text_provided_they_are_stripped() {
+        // A large text file with a null byte far beyond the probe window.
+        let padding = "x".repeat(1024);
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(padding.as_bytes()); // fills the probe window
+        bytes.push(0);
+        bytes.extend_from_slice(b"tail content");
+        let fx = bytes_fixture("binary-late", &bytes);
+        let text = extract_text(&fx.0, 10_000).expect("late nulls must not reject");
+        assert!(text.contains("tail content"), "got: {text:?}");
+    }
+
+    #[test]
+    fn markdown_frontmatter_is_stripped() {
+        let fx = bytes_fixture(
+            "front",
+            b"---\ntitle: Zettel\ndate: 2026-01-01\n---\n\nbody text\n",
+        );
+        assert_eq!(extract_text(&fx.0, 1000).as_deref(), Some("body text"));
+    }
+
+    #[test]
+    fn markdown_frontmatter_with_crlf_is_stripped() {
+        let fx = bytes_fixture(
+            "front-crlf",
+            b"---\r\ntitle: Zettel\r\n---\r\nbody after crlf\r\n",
+        );
+        assert_eq!(
+            extract_text(&fx.0, 1000).as_deref(),
+            Some("body after crlf")
+        );
+    }
+
+    #[test]
+    fn markdown_without_closing_frontmatter_is_text() {
+        // A document that starts with --- but never closes it is NOT
+        // frontmatter; dropping its content would lose real words.
+        let fx = bytes_fixture("front-open", b"---\ntitle: no closing marker here\nmore\n");
+        let text = extract_text(&fx.0, 1000).expect("kept as body");
+        assert!(text.contains("no closing marker"), "got: {text:?}");
+    }
+
+    #[test]
+    fn max_bytes_caps_the_read() {
+        let big = "word ".repeat(10_000); // ~50 KB
+        let fx = bytes_fixture("cap", big.as_bytes());
+        let text = extract_text(&fx.0, 100).expect("capped read still yields text");
+        assert!(text.len() <= 101, "capped at 100 bytes: {}", text.len());
+    }
+
+    #[test]
+    fn invalid_utf8_decodes_lossily_around_ascii() {
+        let fx = bytes_fixture("lossy", b"keep this \xF0\x9F");
+        let text = extract_text(&fx.0, 1000).expect("lossy fallback");
+        assert!(text.contains("keep this"), "got: {text:?}");
+    }
+
+    #[test]
+    fn rtf_basic_stripping_and_rejection() {
+        let fx = bytes_fixture(
+            "rtf",
+            b"{\\rtf1\\ansi Hello {\\b bold} world \\highlight7 highlighted}",
+        );
+        let text = extract_rtf(&fx.0, 1000).expect("rtf extracts");
+        assert!(text.contains("Hello"), "got: {text:?}");
+        assert!(text.contains("world"));
+
+        let not_rtf = bytes_fixture("not-rtf", b"<html>body</html>");
+        assert!(extract_rtf(&not_rtf.0, 1000).is_none());
+
+        let empty_rtf = bytes_fixture("rtf-empty", b"{\\rtf1\\ansi}");
+        assert!(extract_rtf(&empty_rtf.0, 1000).is_none());
+    }
+
+    #[test]
+    fn missing_file_is_none_never_panic() {
+        let path = std::env::temp_dir().join("kensaku-text-absent-file");
+        let _ = fs::remove_file(&path);
+        assert!(extract_text(&path, 1000).is_none());
+        assert!(extract_rtf(&path, 1000).is_none());
+    }
+}
