@@ -27,10 +27,31 @@ pub fn parse_query(
     let mut hints = Vec::new();
     let mut active_filters_dto = Vec::new();
     let mut mode = Mode::Ranked;
+    let mut proximity: Vec<(usize, usize, u32)> = Vec::new();
+    let mut pending_near: Option<u32> = None;
+
+    macro_rules! push_term {
+        ($term:expr) => {
+            terms.push($term);
+            if let Some(d) = pending_near.take() {
+                if terms.len() >= 2 {
+                    proximity.push((terms.len() - 2, terms.len() - 1, d));
+                }
+            }
+        };
+    }
 
     let mut is_first_token = true;
 
     for token in tokens {
+        // `near[x]` is an infix proximity operator, never a search term.
+        if let Token::Word(text) = &token
+            && let Some(distance) = parse_near_token(text)
+        {
+            pending_near = Some(distance);
+            is_first_token = false;
+            continue;
+        }
         match token {
             Token::Word(ref text)
                 if is_first_token && is_directory_like(text) && trie.is_some() =>
@@ -52,7 +73,7 @@ pub fn parse_query(
                             });
                         }
                         TrieMatchResult::Ambiguous(candidates) => {
-                            terms.push(Term {
+                            push_term!(Term {
                                 text: text.clone(),
                                 field: TermField::Any,
                                 phrase: false,
@@ -66,7 +87,7 @@ pub fn parse_query(
                             }
                         }
                         TrieMatchResult::None => {
-                            terms.push(Term {
+                            push_term!(Term {
                                 text: text.clone(),
                                 field: TermField::Any,
                                 phrase: false,
@@ -77,7 +98,7 @@ pub fn parse_query(
                 }
             }
             Token::Word(text) => {
-                terms.push(Term {
+                push_term!(Term {
                     text,
                     field: TermField::Any,
                     phrase: false,
@@ -85,7 +106,7 @@ pub fn parse_query(
                 });
             }
             Token::Quoted(phrase) => {
-                terms.push(Term {
+                push_term!(Term {
                     text: phrase,
                     field: TermField::Any,
                     phrase: true,
@@ -93,7 +114,7 @@ pub fn parse_query(
                 });
             }
             Token::Regex(pattern) => {
-                terms.push(Term {
+                push_term!(Term {
                     text: pattern,
                     field: TermField::Any,
                     phrase: false,
@@ -138,6 +159,22 @@ pub fn parse_query(
                 };
 
                 match key_lower.as_str() {
+                    "near" => {
+                        if let Ok(distance) = value.parse::<u32>() {
+                            pending_near = Some(distance);
+                            continue;
+                        }
+                        hints.push(format!(
+                            "Invalid near filter '{}'; use near:5 (or a near[5] b)",
+                            value
+                        ));
+                        push_term!(Term {
+                            text: raw_token,
+                            field: TermField::Any,
+                            phrase: false,
+                            is_regex: false,
+                        });
+                    }
                     "visual" => {
                         let filter = Filter::Type("image".to_string());
                         if negated {
@@ -145,7 +182,7 @@ pub fn parse_query(
                         } else {
                             filters.push(filter);
                         }
-                        terms.push(Term {
+                        push_term!(Term {
                             text: value.clone(),
                             field: TermField::Any,
                             phrase: quoted_value,
@@ -206,7 +243,7 @@ pub fn parse_query(
                                     resolved_scope = true;
                                 }
                                 TrieMatchResult::Ambiguous(candidates) => {
-                                    terms.push(Term {
+                                    push_term!(Term {
                                         text: value.clone(),
                                         field: TermField::Path,
                                         phrase: false,
@@ -240,7 +277,7 @@ pub fn parse_query(
                         }
                     }
                     "path" => {
-                        terms.push(Term {
+                        push_term!(Term {
                             text: value.clone(),
                             field: TermField::Path,
                             phrase: quoted_value,
@@ -272,7 +309,7 @@ pub fn parse_query(
                                 "Invalid modified filter '{}'; use <7d, >30d, 7d..30d",
                                 value
                             ));
-                            terms.push(Term {
+                            push_term!(Term {
                                 text: raw_token,
                                 field: TermField::Any,
                                 phrase: false,
@@ -299,7 +336,7 @@ pub fn parse_query(
                                 "Invalid size filter '{}'; use >2mb, <100kb, 1mb..10mb",
                                 value
                             ));
-                            terms.push(Term {
+                            push_term!(Term {
                                 text: raw_token,
                                 field: TermField::Any,
                                 phrase: false,
@@ -334,7 +371,7 @@ pub fn parse_query(
                                 "Unknown 'is:{}' filter; use is:image, is:dir, is:file",
                                 value
                             ));
-                            terms.push(Term {
+                            push_term!(Term {
                                 text: raw_token,
                                 field: TermField::Any,
                                 phrase: false,
@@ -357,7 +394,7 @@ pub fn parse_query(
                         });
                     }
                     "name" => {
-                        terms.push(Term {
+                        push_term!(Term {
                             text: value.clone(),
                             field: TermField::Name,
                             phrase: quoted_value,
@@ -365,7 +402,7 @@ pub fn parse_query(
                         });
                     }
                     "content" => {
-                        terms.push(Term {
+                        push_term!(Term {
                             text: value.clone(),
                             field: TermField::Content,
                             phrase: quoted_value,
@@ -381,7 +418,7 @@ pub fn parse_query(
                     }
                     _ => {
                         // Unknown key -> treat as literal text (never zero results)
-                        terms.push(Term {
+                        push_term!(Term {
                             text: raw_token,
                             field: TermField::Any,
                             phrase: false,
@@ -404,6 +441,7 @@ pub fn parse_query(
         raw: raw.to_string(),
         hints,
         active_filters_dto,
+        proximity,
     }
 }
 
@@ -504,6 +542,24 @@ fn parse_size_range(val: &str) -> Option<RangeOp> {
     }
     let size = parse_size(s)?;
     Some(RangeOp::Between(size.saturating_sub(1024), size + 1024))
+}
+
+fn parse_near_token(text: &str) -> Option<u32> {
+    let lower = text.to_ascii_lowercase();
+    let rest = lower.strip_prefix("near")?;
+    let rest = rest.trim();
+    // Only the canonical bracket form: near[5]
+    let inner = rest.strip_prefix('[')?;
+    let digits: String = inner.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let after = &inner[digits.len()..];
+    let after = after.trim();
+    if after != "]" {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 #[cfg(test)]
@@ -638,6 +694,60 @@ mod tests {
         assert!(query.scopes.is_empty());
         assert_eq!(query.mode, Mode::Ranked);
         assert_eq!(query.raw, "alpha beta");
+    }
+
+    #[test]
+    fn parses_near_operator_pair() {
+        let query = parse("mouse near[5] button");
+        assert_eq!(query.terms, vec![term("mouse"), term("button")]);
+        assert_eq!(query.proximity, vec![(0, 1, 5)]);
+    }
+
+    #[test]
+    fn parses_near_operator_chain() {
+        let query = parse("mouse near[3] button near[2] click");
+        assert_eq!(query.proximity, vec![(0, 1, 3), (1, 2, 2)]);
+    }
+
+    #[test]
+    fn doubles_near_operator_last_wins() {
+        let query = parse("mouse near[5] near[2] button");
+        assert_eq!(query.proximity, vec![(0, 1, 2)]);
+    }
+
+    #[test]
+    fn drops_dangling_near_operator() {
+        let query = parse("mouse near[5]");
+        assert_eq!(query.terms, vec![term("mouse")]);
+        assert!(query.proximity.is_empty());
+    }
+
+    #[test]
+    fn leading_near_operator_is_dropped_not_a_term() {
+        let query = parse("near[5] mouse");
+        assert_eq!(query.terms, vec![term("mouse")]);
+        assert!(query.proximity.is_empty());
+    }
+
+    #[test]
+    fn parses_near_filter_form() {
+        let query = parse("mouse near:5 button");
+        assert_eq!(query.terms, vec![term("mouse"), term("button")]);
+        assert_eq!(query.proximity, vec![(0, 1, 5)]);
+    }
+
+    #[test]
+    fn invalid_near_filter_falls_back_to_literal_term() {
+        let query = parse("near:xyz mouse");
+        assert!(
+            query
+                .hints
+                .iter()
+                .any(|h| h.contains("Invalid near filter")),
+            "expected a malformed-near hint, got {:?}",
+            query.hints
+        );
+        assert_eq!(query.terms, vec![term("near:xyz"), term("mouse")]);
     }
 
     #[test]

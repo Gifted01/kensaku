@@ -87,4 +87,8 @@ pub struct Query {
     pub raw: String,
     pub hints: Vec<String>,
     pub active_filters_dto: Vec<ActiveFilterDto>,
+    /// Pairs of term indices that must appear within `distance` words of each
+    /// other (the `near[x]` operator). Indices refer to `terms`.
+    #[serde(default)]
+    pub proximity: Vec<(usize, usize, u32)>,
 }

@@ -62,6 +62,7 @@ Everything is optional. Filters never replace the text; they narrow the set.
 | `re:"fn \\w+"` | regular expression over content + filename |
 | `-node_modules` | exclude term or folder |
 | `"exact phrase"` | phrase |
+| `mouse near[5] button` | terms within 5 words |
 | `mode:exhaustive` | return every match, path-sorted (no ranked tiers) |
 
 Examples:

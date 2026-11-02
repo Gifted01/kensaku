@@ -153,6 +153,93 @@ fn edit_distance_within(needle: &[char], haystack: &str, budget: usize) -> bool 
     previous[hay.len()] <= budget
 }
 
+/// Returns true when `text` contains a `near[x]` proximity operator.
+pub fn contains_near(text: &str) -> bool {
+    text.split_whitespace().any(parse_near_distance_opt)
+}
+
+fn parse_near_distance_opt(tok: &str) -> bool {
+    parse_near_distance(tok).is_some()
+}
+
+fn parse_near_distance(tok: &str) -> Option<u32> {
+    let lower = tok.to_ascii_lowercase();
+    let rest = lower.strip_prefix("near")?;
+    let rest = rest.trim();
+    let inner = rest.strip_prefix('[')?;
+    let digits: String = inner.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let after = inner[digits.len()..].trim();
+    if after != "]" {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Rewrites `a near[n] b` (and chains) into a Tantivy phrase query with slop:
+/// `"a b"~n`. Other tokens are sanitized as usual.
+///
+/// A `near[d]` operator is never emitted as a term: when it cannot bind a term
+/// on both sides (leading, trailing typo, doubled `a near[2] near[3] b`, where
+/// the last distance wins to match the parser) it is dropped, mirroring the
+/// query parser which never pushes it into the term list.
+pub fn rewrite_near_in_group(input: &str) -> String {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if parse_near_distance(tokens[i]).is_some() {
+            i += 1;
+            continue;
+        }
+        // Accumulate `<term> (near[d] <term>)*` into one phrase. Sanitized
+        // tokens are trimmed: characters like `+` or `*` sanitize down to
+        // spaces inside a single word.
+        let mut terms: Vec<String> = Vec::new();
+        {
+            let cleaned = sanitize_query_text(tokens[i]).trim().to_string();
+            if !cleaned.is_empty() {
+                terms.push(cleaned);
+            }
+        }
+        let mut slop: u32 = 0;
+        let mut bound = false;
+        let mut j = i + 1;
+        loop {
+            // Scan a run of operators; only the last distance in a run binds.
+            let mut last_op: Option<u32> = None;
+            while j < tokens.len()
+                && let Some(d) = parse_near_distance(tokens[j])
+            {
+                last_op = Some(d);
+                j += 1;
+            }
+            let Some(d) = last_op else {
+                break;
+            };
+            if j >= tokens.len() {
+                break; // unbound trailing operator
+            }
+            let cleaned = sanitize_query_text(tokens[j]).trim().to_string();
+            if !cleaned.is_empty() {
+                slop += d;
+                bound = true;
+                terms.push(cleaned);
+            }
+            j += 1;
+        }
+        i = j;
+        if bound && terms.len() >= 2 {
+            out.push(format!("\"{}\"~{}", terms.join(" "), slop));
+        } else {
+            out.extend(terms);
+        }
+    }
+    out.join(" ")
+}
+
 pub struct SnippetCache {
     capacity: usize,
     map: HashMap<PathBuf, (String, String)>, // (original, lowercase)
@@ -693,7 +780,11 @@ impl ContentIndex {
 
         let mut plain_clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
         for &(kind, text) in groups {
-            let sanitized = sanitize_query_text(text);
+            let sanitized = if contains_near(text) {
+                rewrite_near_in_group(text)
+            } else {
+                sanitize_query_text(text)
+            };
             if sanitized.trim().is_empty() {
                 continue;
             }
@@ -1313,7 +1404,7 @@ pub fn read_text_content_checked(path: &Path, max_bytes: u64) -> (Option<String>
 ///
 /// Replacing them with spaces preserves the surrounding words while ensuring
 /// raw `:`, quotes, `-`, boolean operators, etc. can never abort parsing.
-fn sanitize_query_text(text: &str) -> String {
+pub fn sanitize_query_text(text: &str) -> String {
     text.replace(
         [
             ':', '^', '[', ']', '{', '}', '~', '*', '?', '\\', '(', ')', '"', '-', '+', '!', '&',
@@ -1356,6 +1447,64 @@ mod tests {
             index: Some(index),
             dir,
         }
+    }
+
+    #[test]
+    fn contains_near_detects_proximity_operator() {
+        assert!(contains_near("mouse NEAR[5] button"));
+        assert!(contains_near("a near[1] b"));
+        assert!(!contains_near("mouse button"));
+        assert!(!contains_near("neighborhood"));
+        assert!(!contains_near("near"));
+        assert!(!contains_near("near[]"));
+        assert!(!contains_near("near[abc]"));
+    }
+
+    #[test]
+    fn rewrite_near_builds_slop_phrases_and_drops_orphans() {
+        assert_eq!(
+            rewrite_near_in_group("mouse near[5] button"),
+            "\"mouse button\"~5"
+        );
+        // Chains sum the operator distances into one phrase.
+        assert_eq!(
+            rewrite_near_in_group("mouse near[3] button near[2] click"),
+            "\"mouse button click\"~5"
+        );
+        // Consecutive operators: only the last distance binds.
+        assert_eq!(
+            rewrite_near_in_group("mouse near[5] near[2] button"),
+            "\"mouse button\"~2"
+        );
+        // Dangling/leading operators are dropped, never emitted as terms.
+        assert_eq!(rewrite_near_in_group("mouse near[5]"), "mouse");
+        assert_eq!(rewrite_near_in_group("near[5] mouse"), "mouse");
+        // Plain tokens still pass through sanitization.
+        assert_eq!(rewrite_near_in_group("a near[1] c++"), "\"a c\"~1");
+    }
+
+    #[test]
+    fn near_operator_limits_results_to_word_distance() {
+        let temp = temp_index("near");
+        let index = temp.index.as_ref().unwrap();
+        add(
+            index,
+            "/tmp/kensaku/n/doc.txt",
+            "doc.txt",
+            "quick brown fox jumps over the lazy dog",
+        );
+        index.commit().unwrap();
+
+        // "quick" -> "lazy" spans 6 words, i.e. slop 5 for a two-term phrase.
+        let hits = index.search("quick near[5] lazy", 10, None);
+        assert!(
+            hits.iter().any(|m| m.path.ends_with("doc.txt")),
+            "near[5] must match a 6-word gap"
+        );
+        assert!(
+            index.search("quick near[1] lazy", 10, None).is_empty(),
+            "near[1] must reject a 6-word gap"
+        );
     }
 
     #[test]

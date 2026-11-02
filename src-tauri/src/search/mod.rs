@@ -957,25 +957,72 @@ impl SearchDispatcher {
         let mut fuzzy_terms: Vec<&str> = Vec::new(); // Any, Name, Path → fuzzy (filename + path)
         let mut bm25_groups: Vec<(FieldKind, &str)> = Vec::new();
         let mut regex_patterns: Vec<&str> = Vec::new();
+        let has_near = !parsed.proximity.is_empty();
+
         for t in &parsed.terms {
             if t.is_regex {
                 regex_patterns.push(&t.text);
-                continue;
             }
-            match t.field {
-                TermField::Any => {
-                    fuzzy_terms.push(&t.text);
-                    bm25_groups.push((FieldKind::Any, &t.text));
+        }
+
+        let mut proximity_phrase_strings: Vec<String> = Vec::new();
+
+        if has_near {
+            let mut involved: HashSet<usize> = HashSet::new();
+            for (i, j, _) in &parsed.proximity {
+                involved.insert(*i);
+                involved.insert(*j);
+            }
+            for (i, j, distance) in &parsed.proximity {
+                // Pass the canonical `near[x]` form through to the content
+                // index, which knows how to rewrite it into a phrase query.
+                // Terms are sanitized by that rewrite.
+                let expr = format!(
+                    "{} near[{}] {}",
+                    parsed.terms[*i].text, distance, parsed.terms[*j].text
+                );
+                proximity_phrase_strings.push(expr);
+            }
+            for expr in &proximity_phrase_strings {
+                bm25_groups.push((FieldKind::Any, expr.as_str()));
+            }
+            for (idx, t) in parsed.terms.iter().enumerate() {
+                if t.is_regex || involved.contains(&idx) {
+                    continue;
                 }
-                TermField::Name => {
-                    fuzzy_terms.push(&t.text);
-                    bm25_groups.push((FieldKind::Name, &t.text));
+                match t.field {
+                    TermField::Any => {
+                        bm25_groups.push((FieldKind::Any, &t.text));
+                    }
+                    TermField::Name => {
+                        bm25_groups.push((FieldKind::Name, &t.text));
+                    }
+                    TermField::Content => {
+                        bm25_groups.push((FieldKind::Content, &t.text));
+                    }
+                    TermField::Path => {}
                 }
-                TermField::Content => {
-                    bm25_groups.push((FieldKind::Content, &t.text));
+            }
+        } else {
+            for t in &parsed.terms {
+                if t.is_regex {
+                    continue;
                 }
-                TermField::Path => {
-                    fuzzy_terms.push(&t.text);
+                match t.field {
+                    TermField::Any => {
+                        fuzzy_terms.push(&t.text);
+                        bm25_groups.push((FieldKind::Any, &t.text));
+                    }
+                    TermField::Name => {
+                        fuzzy_terms.push(&t.text);
+                        bm25_groups.push((FieldKind::Name, &t.text));
+                    }
+                    TermField::Content => {
+                        bm25_groups.push((FieldKind::Content, &t.text));
+                    }
+                    TermField::Path => {
+                        fuzzy_terms.push(&t.text);
+                    }
                 }
             }
         }
@@ -1001,8 +1048,9 @@ impl SearchDispatcher {
         let wants_semantic = semantic_enabled
             && unit_store.is_some()
             && !search_text.is_empty()
+            && !has_near
             && ModelRegistry::global().is_enabled();
-        let wants_visual = visual_store.is_some() && !search_text.is_empty();
+        let wants_visual = visual_store.is_some() && !search_text.is_empty() && !has_near;
         let (node_to_idx, allowed_node_ids): (HashMap<u64, usize>, Option<HashSet<u64>>) =
             if wants_semantic || wants_visual {
                 let mut map = HashMap::new();
@@ -1118,6 +1166,7 @@ impl SearchDispatcher {
         if semantic_enabled
             && model.is_enabled()
             && !search_text.is_empty()
+            && !has_near
             && let Some(store) = unit_store
             && !store.is_empty()
         {
@@ -1159,6 +1208,7 @@ impl SearchDispatcher {
         let visual_floor = 0.20f32;
         let mut visual_ranks: HashMap<PathBuf, (usize, f32)> = HashMap::new();
         if !search_text.is_empty()
+            && !has_near
             && let Some(v_store) = visual_store
             && !v_store.is_empty()
             && let Some(encoder) = crate::embed::visual::active_encoder()
@@ -1358,6 +1408,7 @@ impl SearchDispatcher {
             // broad n-gram noise.
             if candidates.len() < limit
                 && !search_text.is_empty()
+                && !has_near
                 && let Some(c_index) = content_index
             {
                 let w_folded = w_bm25 * 0.55;

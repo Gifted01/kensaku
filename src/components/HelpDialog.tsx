@@ -29,6 +29,7 @@ const FILTERS: [string, string][] = [
   ["content:timeout", "match file contents only"],
   ["re:\"fn \\\\w+\"", "regular expression"],
   ['"last Tuesday"', "time travel filter"],
+  ["mouse near[5] button", "terms within 5 words"],
 ];
 
 export function HelpDialog({ onClose }: { onClose: () => void }) {
