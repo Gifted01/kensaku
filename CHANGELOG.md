@@ -3,14 +3,15 @@
 All notable changes to Kensaku. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/).
 
-## [1.0.12] — 2026-11-02
+## [1.0.12] — 2026-11-03
 
 ### Added
 - `mouse near[5] button`: the `near[x]` proximity operator matches files
   where the terms sit within `x` words of each other. Chains
   (`a near[3] b near[2] c`) and the `near:5` filter form work too; the
   fuzzy, semantic and visual tiers are skipped for such queries because
-  word distance is a lexical constraint embeddings cannot honor.
+  word distance is a lexical constraint embeddings cannot honor. Distances
+  are safely clamped to 100.
 - The data directory is overridable: `KENSAKU_DATA_DIR` (tests, Nix /
   Flatpak-style packaging) has highest precedence, then a `portable` or
   `kensaku.portable` marker file next to the executable keeps everything
@@ -18,6 +19,29 @@ versioning: [SemVer](https://semver.org/).
   before the platform default (`~/.config/kensaku`, `%APPDATA%\kensaku`,
   …). The metadata database no longer hardcodes one location and follows
   the same resolution as every other data path (see `docs/CONFIG.md`).
+- Multilingual and format documentation (`docs/LANGUAGES.md`): detailed
+  analysis of CJK unigram + bigram segmentation, 50+ programming and data
+  formats, and multi-script OCR engine routing.
+
+### Fixed
+- macOS permissions (#73): bundled `Info.plist` with explicit TCC privacy
+  usage descriptions (`NSDocumentsFolderUsageDescription`,
+  `NSDesktopFolderUsageDescription`, etc.) and ensured child preview
+  processes on macOS never receive raw file paths, preventing repeated
+  permission prompt loops on macOS Sequoia / Darwin 24.
+- Theme first-paint flicker (#72): resolves stored or system theme
+  preference before initial paint, eliminating a dark flash on light OS themes.
+- Office document extraction: decodes XML entity references (`&amp;`, `&lt;`,
+  `&gt;`, `&quot;`, `&apos;`) in DOCX, PPTX, XLSX, EPUB, and ODT files.
+- Excel shared strings: accumulates text across all `<t>` tags within a cell
+  instead of only keeping the last one.
+- PDF single-page extraction: safely caps extraction budget at valid UTF-8
+  character boundaries.
+- Ignore engine: merges rules when `.gitignore` and `.kensakuignore` or
+  `.cursorignore` coexist in the same directory rather than overwriting.
+- Windows portable release packaging (#68): automated CI packaging now
+  ships `kensaku-portable-<version>-x64.zip` containing the `portable`
+  marker file and README.
 
 ## [1.0.11] — 2026-10-30
 
