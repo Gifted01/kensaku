@@ -131,4 +131,19 @@ mod tests {
         assert!(!should_pace(CrawlMode::Full));
         assert!(!should_pace(CrawlMode::Balanced));
     }
+
+    /// Eco mode calls on_battery() and heavy_load() which do OS I/O. Whatever
+    /// they return, should_pace must not panic.
+    #[test]
+    fn eco_does_not_panic() {
+        let _ = should_pace(CrawlMode::Eco);
+    }
+
+    /// on_battery and heavy_load must always return a bool without panicking
+    /// regardless of the host environment.
+    #[test]
+    fn os_probes_never_panic() {
+        let _ = on_battery();
+        let _ = heavy_load();
+    }
 }
