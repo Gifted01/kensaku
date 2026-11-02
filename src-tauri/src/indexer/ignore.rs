@@ -69,7 +69,7 @@ impl IgnoreSet {
                 if let Ok(raw) = std::fs::read_to_string(&file) {
                     let rules = parse(&raw);
                     if !rules.is_empty() {
-                        set.rules.insert(dir.clone(), rules);
+                        set.rules.entry(dir.clone()).or_default().extend(rules);
                     }
                 }
             }
@@ -441,6 +441,110 @@ mod tests {
         assert!(set.is_ignored(&dir.join("vendor"), true));
         assert!(set.is_ignored(&dir.join("docs/a/b.txt"), false));
         assert!(!set.is_ignored(&dir.join("docsalot/a.txt"), false));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn kensakuignore_and_multiple_ignore_files_coexist() {
+        let dir = temp("coexist");
+        write_ignore(
+            &dir,
+            ".gitignore",
+            "git_ignored.txt
+",
+        );
+        write_ignore(
+            &dir,
+            ".kensakuignore",
+            "kensaku_ignored.txt
+",
+        );
+        let set = IgnoreSet::from_directories(std::slice::from_ref(&dir));
+
+        assert!(set.is_ignored(&dir.join("git_ignored.txt"), false));
+        assert!(set.is_ignored(&dir.join("kensaku_ignored.txt"), false));
+        assert!(!set.is_ignored(&dir.join("allowed.txt"), false));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parent_directory_exclusion_cannot_be_reincluded() {
+        let dir = temp("parent_reinclude");
+        // Git rule: if a parent directory is excluded, child files cannot re-include themselves
+        write_ignore(
+            &dir,
+            ".gitignore",
+            "ignored_dir/
+!ignored_dir/keep.txt
+",
+        );
+        let set = IgnoreSet::from_directories(std::slice::from_ref(&dir));
+
+        assert!(set.is_ignored(&dir.join("ignored_dir"), true));
+        assert!(
+            set.is_ignored(&dir.join("ignored_dir/keep.txt"), false),
+            "file inside ignored parent dir must remain ignored"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pattern_trailing_whitespace_is_trimmed() {
+        let dir = temp("whitespace_trim");
+        // Lines with spaces or tabs after pattern
+        write_ignore(
+            &dir,
+            ".gitignore",
+            "build   
+*.cache		
+",
+        );
+        let set = IgnoreSet::from_directories(std::slice::from_ref(&dir));
+
+        assert!(set.is_ignored(&dir.join("build"), true));
+        assert!(set.is_ignored(&dir.join("foo.cache"), false));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn glob_character_classes_and_ranges() {
+        let dir = temp("char_classes");
+        write_ignore(
+            &dir,
+            ".gitignore",
+            "img_[0-9][0-9].png
+alpha_[a-z].txt
+non_num_[^0-9].bin
+unterminated_[abc
+",
+        );
+        let set = IgnoreSet::from_directories(std::slice::from_ref(&dir));
+
+        assert!(set.is_ignored(&dir.join("img_42.png"), false));
+        assert!(!set.is_ignored(&dir.join("img_4a.png"), false));
+        assert!(set.is_ignored(&dir.join("alpha_q.txt"), false));
+        assert!(!set.is_ignored(&dir.join("alpha_1.txt"), false));
+        assert!(set.is_ignored(&dir.join("non_num_x.bin"), false));
+        assert!(!set.is_ignored(&dir.join("non_num_5.bin"), false));
+        // Unterminated bracket class matches literal '['
+        assert!(set.is_ignored(&dir.join("unterminated_[abc"), false));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unanchored_wildcards_match_arbitrary_depth() {
+        let dir = temp("deep_wildcards");
+        write_ignore(
+            &dir,
+            ".gitignore",
+            "*.bak
+",
+        );
+        let set = IgnoreSet::from_directories(std::slice::from_ref(&dir));
+
+        assert!(set.is_ignored(&dir.join("root.bak"), false));
+        assert!(set.is_ignored(&dir.join("a/b/c/d/deep.bak"), false));
+        assert!(!set.is_ignored(&dir.join("a/b/c/d/deep.bak.txt"), false));
         fs::remove_dir_all(&dir).unwrap();
     }
 }
