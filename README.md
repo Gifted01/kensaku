@@ -60,6 +60,7 @@ Filename tools are everywhere. Reading *inside* your files — locally, instantl
 | Filename search, milliseconds | ✅ | ✅ | ✅ | ✅ |
 | Full text inside PDF/DOCX/EPUB… | ✅ | ❌ | ❌ | ❌ |
 | Text inside screenshots & images (OCR) | ✅ | ❌ | ❌ | ❌ |
+| Multilingual & CJK text (50+ formats) | ✅ | ❌ | ❌ | ❌ |
 | Find by meaning ("the PDF about indexing") | ✅ | ❌ | ❌ | ❌ |
 | Natural-language time ("screenshots from last week") | ✅ | ❌ | partial | ❌ |
 | Your AI agents can search it (MCP) | ✅ | ❌ | ❌ | ❌ |
@@ -83,10 +84,10 @@ Filename tools are everywhere. Reading *inside* your files — locally, instantl
 
 **Finds more**
 - Names, full text, fuzzy matches that tolerate typos, and meaning, in one search.
-- Documents: PDF, DOCX, PPTX, XLSX, EPUB, ODT/ODS/ODP, RTF, plain text, code, and logs, including CJK text.
-- Images: text is read with PP-OCRv6 by default (no system install needed). An optional
-  higher-quality Indra engine (deskew, multi-script recognition, ~27 MB pack downloaded on
-  demand) and classic Tesseract are both selectable in Setup/Settings.
+- **Documents & Office**: PDF, DOCX, PPTX, XLSX, EPUB, ODT/ODS/ODP, RTF, and plain text.
+- **Multilingual & CJK by default**: Custom unigram + bigram tokenizer for Chinese (Hanzi/Bopomofo), Japanese (Kanji/Kana), and Korean (Hangul), plus mixed-script boundary handling. Detailed breakdown in [docs/LANGUAGES.md](docs/LANGUAGES.md).
+- **50+ Code & Data Formats**: Rust, Python, TypeScript, Go, C/C++, Java, Shell, SQL, JSON, YAML, TOML, Dockerfile, and more.
+- **Images & OCR**: Text is read with PP-OCRv6 by default (no install needed). Higher-quality Indra engine (deskew, multi-script Latin/CJK/RTL/World recognition, ~27 MB pack) and classic Tesseract are selectable in Setup/Settings.
 
 **Precise**
 - Filters and sort: Best match, Newest, Oldest, Largest, Name.
