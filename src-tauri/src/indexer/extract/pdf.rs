@@ -58,7 +58,10 @@ pub fn extract_pdf(path: &Path, max_bytes: usize) -> Option<PdfExtractResult> {
         // banner, which is why this is not "exactly empty").
         let is_scanned = page_count > 0 && full_text.trim().len() < 50;
         let mut ocr_unavailable = false;
-        let text = if is_scanned && crate::indexer::extract::ocr_enabled() {
+        // A single huge page can exceed the cap on its own (the per-page
+        // check only fires between pages); the assembled text is truncated
+        // here so the content budget holds for every PDF.
+        let mut text = if is_scanned && crate::indexer::extract::ocr_enabled() {
             let (ocr_text, unavailable) = extract_scanned_pdf_ocr(&doc, max_bytes);
             ocr_unavailable = unavailable;
             match ocr_text {
@@ -72,6 +75,15 @@ pub fn extract_pdf(path: &Path, max_bytes: usize) -> Option<PdfExtractResult> {
         } else {
             full_text
         };
+
+        if text.len() > max_bytes {
+            let mut cut = max_bytes;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+            text.push_str("\n... [content truncated at limit]");
+        }
 
         Some(PdfExtractResult {
             text,
@@ -154,4 +166,153 @@ fn extract_scanned_pdf_ocr(doc: &Document, max_bytes: usize) -> (Option<String>,
 
     let text = (!collected.trim().is_empty()).then_some(collected);
     (text, unavailable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::{Dictionary, Object, Stream, dictionary};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A temp file that removes itself on drop.
+    struct Fixture(PathBuf);
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn temp_path(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "kensaku-pdf-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    /// Builds and saves a PDF with one page per text. Empty page text
+    /// produces a page with no text operators (viewed as "scanned").
+    fn pdf_fixture(tag: &str, page_texts: &[&str]) -> Fixture {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        // lopdf's text collection only runs when /F1 Tf resolves to a font
+        // in the page resources, so every page carries the same minimal
+        // Helvetica resource.
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+            "Encoding" => "StandardEncoding",
+        });
+        let resources = dictionary! { "Font" => dictionary! { "F1" => font_id } };
+        let mut kids = Vec::new();
+        for page_text in page_texts {
+            let ops = if page_text.is_empty() {
+                Vec::new()
+            } else {
+                format!("BT /F1 12 Tf ({}) Tj ET", page_text).into_bytes()
+            };
+            let content_id = doc.add_object(Stream::new(Dictionary::new(), ops));
+            let page_id = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => content_id,
+                "Resources" => resources.clone(),
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            });
+            kids.push(page_id.into());
+        }
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => kids.clone(),
+                "Count" => i64::try_from(kids.len()).expect("page count"),
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog_id);
+        let path = temp_path(tag);
+        doc.save(&path).expect("write pdf");
+        Fixture(path)
+    }
+
+    #[test]
+    fn pdf_extracts_page_text_and_count() {
+        let long = "kensaku full text extraction test document with plenty of words on the page"; // > 50 chars: not scanned
+        let fx = pdf_fixture("pdf-multi", &[long, "second page marker"]);
+        let result = extract_pdf(&fx.0, 1_000_000).expect("pdf extracts");
+        assert_eq!(result.page_count, 2);
+        assert!(!result.is_encrypted);
+        assert!(!result.is_scanned);
+        assert!(result.text.contains(long), "got: {:?}", result.text);
+        assert!(
+            result.text.contains("second page marker"),
+            "all pages indexed: {:?}",
+            result.text
+        );
+    }
+
+    #[test]
+    fn pdf_pages_get_their_own_marker() {
+        let fx = pdf_fixture(
+            "pdf-pages-marker",
+            &[
+                "alpha words to make the page real",
+                "beta words that follow",
+            ],
+        );
+        let result = extract_pdf(&fx.0, 1_000_000).expect("pdf extracts");
+        assert!(result.text.contains("--- Page"), "{:?}", result.text);
+    }
+
+    #[test]
+    fn pdf_with_no_extractable_text_counts_as_scanned() {
+        let fx = pdf_fixture("pdf-scanned", &[""]);
+        let result = extract_pdf(&fx.0, 1_000_000).expect("scanned pdf still returns a result");
+        assert!(result.is_scanned);
+        assert_eq!(result.page_count, 1);
+        // With no OCR engine available on this host the placeholder stands in;
+        // the real replacement happens when an engine can run.
+        assert!(!result.text.is_empty());
+    }
+
+    #[test]
+    fn pdf_short_text_also_counts_as_scanned() {
+        // Below the 50-char threshold: scanner banner + page number class of
+        // content must not promise a "pure text" extraction.
+        let fx = pdf_fixture("pdf-banner", &["Page 3"]);
+        let result = extract_pdf(&fx.0, 1_000_000).expect("pdf extracts");
+        assert!(result.is_scanned);
+    }
+
+    #[test]
+    fn pdf_truncates_at_max_bytes() {
+        let fx = pdf_fixture("pdf-cap", &["word ".repeat(400).as_str()]);
+        let result = extract_pdf(&fx.0, 40).expect("pdf extracts");
+        assert!(
+            result.text.contains("[content truncated at limit]"),
+            "{:?}",
+            result.text
+        );
+    }
+
+    #[test]
+    fn pdf_garbage_and_missing_input_is_none_never_panics() {
+        let path = temp_path("pdf-garbage");
+        std::fs::write(&path, b"definitely not a pdf file").unwrap();
+        let fx = Fixture(path);
+        assert!(extract_pdf(&fx.0, 1000).is_none());
+
+        let missing = temp_path("pdf-absent");
+        let _ = std::fs::remove_file(&missing);
+        assert!(extract_pdf(&missing, 1000).is_none());
+    }
 }
