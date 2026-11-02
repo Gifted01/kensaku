@@ -137,14 +137,12 @@ fn render_external(source: &Path, out_dir: &Path, kind: Kind) -> Result<PathBuf,
                         cmd.arg("-");
                         Some(bytes)
                     }
-                    Err(_) => None,
+                    Err(_) => return Err(format!("could not read source PDF: {}", source.display())),
                 }
             } else {
+                cmd.arg(source);
                 None
             };
-            if stdin_data.is_none() {
-                cmd.arg(source);
-            }
             cmd.arg(&raw_base);
             run_timed(&mut cmd, stdin_data)
         }

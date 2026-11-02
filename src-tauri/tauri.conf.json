@@ -48,6 +48,9 @@
         "installerIcon": "./icons/icon.ico",
         "uninstallerIcon": "./icons/icon.ico"
       }
+    },
+    "macOS": {
+      "infoPlist": "Info.plist"
     }
   }
 }
