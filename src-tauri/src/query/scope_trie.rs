@@ -269,3 +269,277 @@ impl DirectoryTrie {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::walker::FileEntry;
+
+    /// entries: absolute-ish dirs/files. Returns (entries, path_index).
+    fn fixture(entries: &[(&str, bool)]) -> (Vec<FileEntry>, HashMap<PathBuf, usize>) {
+        let mut list = Vec::new();
+        let mut index = HashMap::new();
+        for (i, (path, is_dir)) in entries.iter().enumerate() {
+            let path = PathBuf::from(path);
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            list.push(FileEntry {
+                id: i as u64,
+                path: path.clone(),
+                name,
+                extension: None,
+                size: 0,
+                modified: 0,
+                is_dir: *is_dir,
+                dev: 0,
+                ino: 0,
+                char_bloom: 0,
+                content_pending: false,
+            });
+            index.insert(path, i);
+        }
+        (list, index)
+    }
+
+    fn sample() -> (Vec<FileEntry>, HashMap<PathBuf, usize>) {
+        fixture(&[
+            ("/home/gochi", true),
+            ("/home/gochi/projects", true),
+            ("/home/gochi/projects/kensaku", true),
+            ("/home/gochi/projects/other", true),
+            ("/home/gochi/projects/kensaku/src", true),
+            ("/home/gochi/projects/kensaku/src/main.rs", false),
+            ("/home/gochi/notes", true),
+        ])
+    }
+
+    fn trie(entries: &[FileEntry], index: &HashMap<PathBuf, usize>) -> DirectoryTrie {
+        DirectoryTrie::build(entries, index, 1)
+    }
+
+    fn dir_of(result: &TrieMatchResult) -> Option<usize> {
+        match result {
+            TrieMatchResult::Single(r) => Some(r.dir_idx),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn resolve_exact_directory_name() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        assert_eq!(dir_of(&t.resolve("kensaku", &entries, &index)), Some(2));
+        assert_eq!(dir_of(&t.resolve("notes", &entries, &index)), Some(6));
+    }
+
+    #[test]
+    fn resolve_is_case_insensitive() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        // Trie lookup folds to lowercase via build().
+        assert_eq!(dir_of(&t.resolve("KENSaku", &entries, &index)), Some(2));
+    }
+
+    #[test]
+    fn resolve_ambiguous_exact_name_lists_all_candidates() {
+        let (entries, index) = sample();
+        let everything = fixture(&[
+            ("/home/gochi", true),
+            ("/home/gochi/src", true),
+            ("/opt/src", true),
+        ]);
+        let sub_trie = DirectoryTrie::build(&everything.0, &everything.1, 1);
+        match sub_trie.resolve("src", &everything.0, &everything.1) {
+            TrieMatchResult::Ambiguous(c) => {
+                assert_eq!(c.len(), 2);
+                let dir_idxs: Vec<usize> = c.iter().map(|r| r.dir_idx).collect();
+                assert!(dir_idxs.contains(&1) && dir_idxs.contains(&2));
+            }
+            other => panic!("expected ambiguous, got {other:?}"),
+        }
+        let _ = (entries, index);
+    }
+
+    #[test]
+    fn resolve_unique_prefix_matches_single_directory() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        // "ken" prefix-matches only "kensaku".
+        assert_eq!(dir_of(&t.resolve("ken", &entries, &index)), Some(2));
+    }
+
+    #[test]
+    fn resolve_ambiguous_prefix_lists_candidates() {
+        let (entries, index) = fixture(&[
+            ("/w/proj-light", true),
+            ("/w/proj-heavy", true),
+            ("/w/baseline", true),
+        ]);
+        let t = DirectoryTrie::build(&entries, &index, 1);
+        // "proj" prefix-matches two differently-suffixed dirs.
+        match t.resolve("proj", &entries, &index) {
+            TrieMatchResult::Ambiguous(c) => {
+                assert_eq!(c.len(), 2);
+                let dir_idxs: Vec<usize> = c.iter().map(|r| r.dir_idx).collect();
+                assert!(dir_idxs.contains(&0) && dir_idxs.contains(&1));
+            }
+            other => panic!("expected ambiguous prefix, got {other:?}"),
+        }
+        // A prefix that narrows to one dir resolves fully again.
+        assert_eq!(dir_of(&t.resolve("proj-light", &entries, &index)), Some(0));
+    }
+
+    #[test]
+    fn resolve_prefix_beats_fuzzy_tier() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        // "ot" exactly prefixes "other" and no other dir name, even though
+        // fuzzy "contains" would also accept nothing else. Single result.
+        assert_eq!(dir_of(&t.resolve("ot", &entries, &index)), Some(3));
+        // "ther" matches nothing exactly or by prefix; the fuzzy tier still
+        // finds "other" via substring containment.
+        assert_eq!(dir_of(&t.resolve("ther", &entries, &index)), Some(3));
+    }
+
+    #[test]
+    fn resolve_unknown_name_is_none() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        assert!(matches!(
+            t.resolve("zzzznothing", &entries, &index),
+            TrieMatchResult::None
+        ));
+        assert!(matches!(
+            t.resolve("", &entries, &index),
+            TrieMatchResult::None
+        ));
+        assert!(matches!(
+            t.resolve("   ", &entries, &index),
+            TrieMatchResult::None
+        ));
+    }
+
+    #[test]
+    fn resolve_full_path_direct_hit() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        assert_eq!(
+            dir_of(&t.resolve("/home/gochi/projects/kensaku", &entries, &index)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn resolve_path_suffix_match() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        // A relative path that ends a real directory path, and is not a
+        // registered path index entry itself.
+        assert_eq!(
+            dir_of(&t.resolve("projects/kensaku", &entries, &index)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn resolve_file_path_never_becomes_a_dir_scope() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        // The file is registered in path_index but is not a dir; the suffix
+        // branch and the name trie also only ever contain dirs. A file path
+        // must resolve to None, never pretend to be a directory scope.
+        assert_eq!(
+            dir_of(&t.resolve("/home/gochi/projects/kensaku/src/main.rs", &entries, &index)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_trailing_slash_is_normalized() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        assert_eq!(
+            dir_of(&t.resolve("projects/kensaku/", &entries, &index)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn resolve_tilde_expands_to_home_and_matches() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        // Only meaningful if the fixture home matches the real home dir;
+        // build refs the real $HOME through dirs::home_dir.
+        if dirs::home_dir()
+            .map(|h| h.ends_with("gochi"))
+            .unwrap_or(false)
+        {
+            assert_eq!(
+                dir_of(&t.resolve("~/projects/kensaku", &entries, &index)),
+                Some(2)
+            );
+        }
+    }
+
+    #[test]
+    fn scope_candidates_include_the_dir_and_all_descendants() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        let candidates = t.get_scope_candidates(1, 1);
+        assert!(candidates.contains(&1), "the dir itself is searchable");
+        assert!(
+            candidates.contains(&2) && candidates.contains(&4) && candidates.contains(&5),
+            "descendants at every depth: {candidates:?}"
+        );
+        assert!(!candidates.contains(&6), "unrelated subtree excluded");
+    }
+
+    #[test]
+    fn scope_candidates_do_not_leak_upwards_to_siblings() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        let candidates = t.get_scope_candidates(2, 1);
+        assert!(candidates.contains(&2) && candidates.contains(&4));
+        assert!(
+            !candidates.contains(&3),
+            "sibling dir excluded: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn scope_candidates_for_a_leaf_is_just_itself() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        let candidates = t.get_scope_candidates(5, 1);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0], 5);
+    }
+
+    #[test]
+    fn scope_candidates_cache_returns_same_list_per_generation() {
+        let (entries, index) = sample();
+        let t = trie(&entries, &index);
+        let first = t.get_scope_candidates(1, 1);
+        let second = t.get_scope_candidates(1, 1);
+        assert!(Arc::ptr_eq(&first, &second), "same generation hits cache");
+    }
+
+    #[test]
+    fn scope_candidates_recomputes_after_generation_bump() {
+        let (entries, index) = sample();
+        let mut t = trie(&entries, &index);
+        let stale = t.get_scope_candidates(1, 1);
+        // Build replaces the whole structure on a real refresh; here the
+        // generation differs from the cache key, so a new gen re-computes
+        // and evicts the stale entries.
+        t.generation = 2;
+        let fresh = t.get_scope_candidates(1, 2);
+        assert!(
+            !Arc::ptr_eq(&stale, &fresh),
+            "new generation must re-compute"
+        );
+        assert_eq!(*stale, *fresh, "same data either way");
+    }
+}

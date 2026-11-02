@@ -92,3 +92,103 @@ pub struct Query {
     #[serde(default)]
     pub proximity: Vec<(usize, usize, u32)>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_matches_covers_every_operator_boundary() {
+        // Lt / Lte at the boundary.
+        assert!(RangeOp::Lt(5).matches(4));
+        assert!(!RangeOp::Lt(5).matches(5));
+        assert!(!RangeOp::Lt(5).matches(6));
+        assert!(RangeOp::Lte(5).matches(5));
+        assert!(!RangeOp::Lte(5).matches(6));
+        assert!(!RangeOp::Gt(5).matches(5));
+        assert!(RangeOp::Gt(5).matches(6));
+        assert!(RangeOp::Gte(5).matches(5));
+        assert!(!RangeOp::Gte(5).matches(4));
+        // Inclusive on both ends.
+        assert!(RangeOp::Between(2, 9).matches(2));
+        assert!(RangeOp::Between(2, 9).matches(9));
+        assert!(!RangeOp::Between(2, 9).matches(1));
+        assert!(!RangeOp::Between(2, 9).matches(10));
+        // Zero and u64::MAX edges (file size 0 / enormous sizes must not
+        // wrap or overflow).
+        assert!(RangeOp::Gte(0).matches(0));
+        assert!(RangeOp::Lt(u64::MAX).matches(u64::MAX - 1));
+        assert!(!RangeOp::Between(0, u64::MAX - 1).matches(u64::MAX));
+    }
+
+    #[test]
+    fn query_json_round_trip_preserves_everything() {
+        let q = Query {
+            terms: vec![Term {
+                text: "parse".to_string(),
+                field: TermField::Name,
+                phrase: false,
+                is_regex: true,
+            }],
+            filters: vec![
+                Filter::Size(RangeOp::Gt(1024)),
+                Filter::Not(Box::new(Filter::Kind(FileKind::Dir))),
+            ],
+            scopes: vec![Scope {
+                dir_id: 7,
+                include: false,
+                path: PathBuf::from("/tmp/excluded"),
+            }],
+            mode: Mode::Exhaustive,
+            raw: "re:parse size:>1kb".to_string(),
+            hints: vec!["hint".to_string()],
+            active_filters_dto: vec![ActiveFilterDto {
+                raw: "size:>1kb".to_string(),
+                filter_type: "size".to_string(),
+                value: "1kb".to_string(),
+                negated: false,
+            }],
+            proximity: vec![(0, 1, 5)],
+        };
+
+        let json = serde_json::to_string(&q).unwrap();
+        let back: Query = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, q);
+    }
+
+    #[test]
+    fn saved_query_without_proximity_field_still_loads() {
+        // Queries saved by 1.0.11 have no `proximity` key; the
+        // #[serde(default)] keeps those loading as empty.
+        let legacy = serde_json::json!({
+            "terms": [],
+            "filters": [],
+            "scopes": [],
+            "mode": "Ranked",
+            "raw": "mouse button",
+            "hints": [],
+            "active_filters_dto": []
+        });
+        let q: Query = serde_json::from_value(legacy).expect("legacy query must load");
+        assert!(q.proximity.is_empty());
+        assert_eq!(q.mode, Mode::Ranked);
+        assert_eq!(q.raw, "mouse button");
+    }
+
+    #[test]
+    fn term_field_file_kind_enums_round_trip_texts() {
+        for (field, name) in [
+            (TermField::Any, r#""Any""#),
+            (TermField::Name, r#""Name""#),
+            (TermField::Content, r#""Content""#),
+            (TermField::Path, r#""Path""#),
+        ] {
+            let json = serde_json::to_string(&field).unwrap();
+            assert_eq!(json, name);
+            let back: TermField = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, field);
+        }
+        let kinds: Vec<FileKind> = serde_json::from_str(r#"["File", "Dir"]"#).unwrap();
+        assert_eq!(kinds, vec![FileKind::File, FileKind::Dir]);
+    }
+}
