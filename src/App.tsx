@@ -32,6 +32,7 @@ import { ResultControls } from "./components/ResultControls";
 import { VirtualGrid } from "./components/VirtualGrid";
 import { FileRow } from "./components/FileRow";
 import { normalizeTheme } from "./hooks/useTheme";
+import { setLanguageSetting, t, useLanguage } from "./i18n";
 import { PreviewDialog } from "./components/PreviewDialog";
 import { classify } from "./lib/categories";
 import { inFilter } from "./lib/query";
@@ -71,6 +72,7 @@ function putSnippet(
 }
 
 function App() {
+  useLanguage();
   const [isSetupComplete, setIsSetupComplete] = useState<boolean | null>(null);
   const [query, setQuery] = useState("");
 
@@ -116,7 +118,12 @@ function App() {
   const [config, setConfig] = useState<KensakuConfig | null>(null);
   useEffect(() => {
     invoke<KensakuConfig>("get_config")
-      .then(setConfig)
+      .then((cfg) => {
+        setConfig(cfg);
+        // Durable copy of the interface language (localStorage is only the
+        // pre-paint pick), applied the same way as the theme below.
+        setLanguageSetting(cfg.language);
+      })
       .catch(() => undefined);
   }, [showSettings]);
   /* The backend config is the durable copy of the theme — localStorage does
@@ -592,8 +599,8 @@ function App() {
   const handleCopyPath = useCallback(
     (path: string) => {
       navigator.clipboard.writeText(path).then(
-        () => flash("Path copied"),
-        () => flash("Couldn't copy the path"),
+        () => flash(t("Path copied")),
+        () => flash(t("Couldn't copy the path")),
       );
     },
     [flash],
@@ -993,11 +1000,11 @@ function App() {
               y={menu.y}
               onClose={() => setMenu(null)}
               items={[
-                { label: "Open", onSelect: () => handleOpenFile(menu.result.path) },
-                { label: "Preview", onSelect: () => setPreview(menu.result) },
-                { label: "Show in folder", onSelect: () => handleOpenFolder(menu.result.path) },
-                { label: "Copy path", onSelect: () => handleCopyPath(menu.result.path) },
-                { label: "Details", onSelect: () => setDetails(menu.result), separatorBefore: true },
+                { label: t("Open"), onSelect: () => handleOpenFile(menu.result.path) },
+                { label: t("Preview"), onSelect: () => setPreview(menu.result) },
+                { label: t("Show in folder"), onSelect: () => handleOpenFolder(menu.result.path) },
+                { label: t("Copy path"), onSelect: () => handleCopyPath(menu.result.path) },
+                { label: t("Details"), onSelect: () => setDetails(menu.result), separatorBefore: true },
               ] as ContextMenuItem[]}
             />
           )}
@@ -1038,7 +1045,7 @@ function App() {
                 trailing={
                   <button
                     type="button"
-                    title="Settings"
+                    title={t("Settings")}
                     onClick={() => openSettings()}
                     className="btn btn-ghost btn-icon h-9 w-9"
                   >
@@ -1057,12 +1064,12 @@ function App() {
 
               {!isCommandMode && interpretation.length > 0 && (
                 <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3.5 pb-1.5">
-                  <span className="t-meta mr-1 text-subtle">Understood as</span>
+                  <span className="t-meta mr-1 text-subtle">{t("Understood as")}</span>
                   {interpretation.map((c, i) => (
                     <button
                       key={`${c.raw}-${i}`}
                       type="button"
-                      title={`Remove “${c.source}”`}
+                      title={t("Remove “{text}”", { text: c.source })}
                       onClick={() =>
                         setQuery((prev) =>
                           prev.replace(c.source, "").replace(/\s+/g, " ").trim(),
@@ -1070,7 +1077,7 @@ function App() {
                       }
                       className="group flex h-6 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 text-[12px] text-fg shadow-[inset_0_0_0_1px_var(--border)] transition-colors hover:text-danger"
                     >
-                      {c.label}
+                      {chipLabel(c)}
                       <X className="h-2.5 w-2.5 opacity-50 group-hover:opacity-100" />
                     </button>
                   ))}
@@ -1108,7 +1115,7 @@ function App() {
                   <input
                     autoFocus
                     value={saveName}
-                    placeholder="Name this search"
+                    placeholder={t("Name this search")}
                     onChange={(e) => setSaveName(e.target.value)}
                     onKeyDown={async (e) => {
                       if (e.key !== "Enter") return;
@@ -1241,21 +1248,21 @@ function App() {
                   ) : hasQuery ? (noResults ? (
                     <div className="flex h-full flex-col items-start justify-end gap-4 px-4 pb-8 select-none">
                       <p className="t-moment rise-in max-w-lg text-muted">
-                        Nothing called <span className="text-fg">{query.trim()}</span>, yet.
+                        {t("Nothing called")} <span className="text-fg">{query.trim()}</span>{t(", yet.")}
                       </p>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {hasActiveFilters(query) && (
-                          <SuggestChip label="Remove filters" onClick={() => setQuery("")} />
+                          <SuggestChip label={t("Remove filters")} onClick={() => setQuery("")} />
                         )}
                         <SuggestChip
-                          label="Try type:pdf"
+                          label={t("Try type:pdf")}
                           onClick={() => {
                             setQuery("type:pdf");
                             inputRef.current?.focus();
                           }}
                         />
                         <SuggestChip
-                          label="Nothing but folders"
+                          label={t("Nothing but folders")}
                           onClick={() => {
                             setQuery("type:dir");
                             inputRef.current?.focus();
@@ -1308,6 +1315,25 @@ function SuggestChip({ label, onClick }: { label: string; onClick: () => void })
       {label}
     </button>
   );
+}
+
+/* Interpretation chips arrive with English labels from the backend
+   ("Modified: last 7 days", "Size: under 5MB"); show them in the UI language. */
+function chipLabel(c: { kind: string; label: string; raw: string }): string {
+  const m =
+    c.label.match(/^Size: (under|over) (.+)$/) ??
+    c.label.match(/^(In|Alias): (.+)$/) ??
+    c.label.match(/^Modified: (last|days ago) (.+)$/);
+  if (m) {
+    const [, kind, value] = m;
+    if (kind === "under") return t("Size: under {v}", { v: value });
+    if (kind === "over") return t("Size: over {v}", { v: value });
+    if (kind === "In") return t("In: {v}", { v: value });
+    if (kind === "Alias") return t("Alias: {v}", { v: value });
+    if (kind === "days ago") return t("Modified: {v} days ago", { v: value });
+    return t("Modified: last {v}", { v: t(value.toLowerCase()) });
+  }
+  return t(c.label);
 }
 
 function hasActiveFilters(q: string): boolean {

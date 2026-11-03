@@ -306,7 +306,10 @@ pub fn ocr_status() -> OcrStatus {
     // The configured (private) tessdata directory takes precedence when it
     // exists, mirroring what `extract_image_ocr` does at runtime.
     if dir.is_dir() {
-        list.env("TESSDATA_PREFIX", &dir);
+        list.env(
+            "TESSDATA_PREFIX",
+            crate::util::process::ansi_safe_path(&dir).unwrap_or_else(|| dir.clone()),
+        );
     }
 
     match list.output() {
@@ -343,10 +346,25 @@ pub fn download_eng_tessdata() -> Result<PathBuf, String> {
 }
 
 fn download_eng_tessdata_to(dir: &Path) -> Result<PathBuf, String> {
-    const URL: &str = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata";
+    download_tessdata_to(dir, "eng")
+}
+
+/// Downloads `rus.traineddata` (Russian, Cyrillic) into [`tessdata_dir`].
+pub fn download_rus_tessdata() -> Result<PathBuf, String> {
+    let path = download_tessdata_to(&tessdata_dir(), "rus")?;
+    reset_tesseract_probe();
+    Ok(path)
+}
+
+/// Downloads `<lang>.traineddata` from tessdata_fast into `dir`.
+fn download_tessdata_to(dir: &Path, lang: &str) -> Result<PathBuf, String> {
+    if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(format!("Invalid tessdata language '{lang}'"));
+    }
+    let url = format!("https://github.com/tesseract-ocr/tessdata_fast/raw/main/{lang}.traineddata");
     const MIN_BYTES: u64 = 1_000_000;
 
-    let target = dir.join("eng.traineddata");
+    let target = dir.join(format!("{lang}.traineddata"));
     if let Ok(metadata) = std::fs::metadata(&target)
         && metadata.is_file()
         && metadata.len() > MIN_BYTES
@@ -368,11 +386,11 @@ fn download_eng_tessdata_to(dir: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("Failed to secure {}: {}", dir.display(), e))?;
     }
 
-    let part = dir.join("eng.traineddata.part");
+    let part = dir.join(format!("{lang}.traineddata.part"));
     let _ = std::fs::remove_file(&part);
 
     let download = (|| -> Result<u64, String> {
-        let response = match ureq::get(URL).timeout(Duration::from_secs(600)).call() {
+        let response = match ureq::get(&url).timeout(Duration::from_secs(600)).call() {
             Ok(response) => response,
             Err(ureq::Error::Status(code, _)) => {
                 return Err(format!("Download failed: HTTP {}", code));
@@ -404,8 +422,8 @@ fn download_eng_tessdata_to(dir: &Path) -> Result<PathBuf, String> {
     if written <= MIN_BYTES {
         let _ = std::fs::remove_file(&part);
         return Err(format!(
-            "Downloaded eng.traineddata is too small ({} bytes; expected more than {})",
-            written, MIN_BYTES
+            "Downloaded {}.traineddata is too small ({} bytes; expected more than {})",
+            lang, written, MIN_BYTES
         ));
     }
 
@@ -452,6 +470,7 @@ fn tesseract_has_language() -> bool {
     let mut list = tesseract_command();
     list.arg("--list-langs");
     if let Some(dir) = private_tessdata(&tessdata_dir()) {
+        let dir = crate::util::process::ansi_safe_path(&dir).unwrap_or(dir);
         list.env("TESSDATA_PREFIX", dir);
     }
     match list.output() {
@@ -466,6 +485,68 @@ fn tesseract_has_language() -> bool {
 /// Forgets the cached Tesseract probe (Settings "re-check", config changes).
 pub fn reset_tesseract_probe() {
     TESSERACT_PROBE.store(0, Ordering::Relaxed);
+    *tesseract_langs_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+/// Whether OCR should read Cyrillic (Russian interface or Cyrillic-script OS).
+static CYRILLIC_OCR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_cyrillic_ocr(enabled: bool) {
+    CYRILLIC_OCR.store(enabled, Ordering::Relaxed);
+}
+
+pub fn cyrillic_ocr() -> bool {
+    CYRILLIC_OCR.load(Ordering::Relaxed)
+}
+
+fn tesseract_langs_slot() -> &'static std::sync::Mutex<Option<Vec<String>>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<Vec<String>>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Languages Tesseract can use, listed once and cached until the probe is
+/// reset (after a language download).
+fn tesseract_languages() -> Vec<String> {
+    let mut slot = tesseract_langs_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if let Some(langs) = slot.as_ref() {
+        return langs.clone();
+    }
+    let mut list = tesseract_command();
+    list.arg("--list-langs");
+    if let Some(dir) = private_tessdata(&tessdata_dir()) {
+        let dir = crate::util::process::ansi_safe_path(&dir).unwrap_or(dir);
+        list.env("TESSDATA_PREFIX", dir);
+    }
+    let langs = match list.stdout(Stdio::piped()).stderr(Stdio::piped()).output() {
+        Ok(output) => {
+            let mut langs = parse_langs(&String::from_utf8_lossy(&output.stdout));
+            if langs.is_empty() {
+                langs = parse_langs(&String::from_utf8_lossy(&output.stderr));
+            }
+            langs
+        }
+        Err(_) => Vec::new(),
+    };
+    *slot = Some(langs.clone());
+    langs
+}
+
+/// The `-l` value for a Tesseract run: `rus+eng` when Cyrillic is wanted and
+/// Russian data is installed, otherwise `None` (Tesseract's default, English).
+pub fn tesseract_lang_arg(cyrillic: bool, available: &[String]) -> Option<String> {
+    if !cyrillic || !available.iter().any(|l| l == "rus") {
+        return None;
+    }
+    if available.iter().any(|l| l == "eng") {
+        Some("rus+eng".to_string())
+    } else {
+        Some("rus".to_string())
+    }
 }
 
 /// Reads text from an image file with whichever engine can run.
@@ -568,7 +649,14 @@ fn tesseract_ocr(path: &Path) -> crate::ocr::OcrOutcome {
     // Linux and Windows have no per-process folder grant, so they keep
     // passing the path: one less full-file copy in memory, and no reliance on
     // how a particular tesseract build handles binary stdin.
-    let stdin_bytes = if cfg!(target_os = "macos") {
+    //
+    // On Windows, Tesseract reads its arguments in the ANSI code page, so a
+    // path with characters outside it (Cyrillic on an English Windows, or a
+    // Cyrillic user name in the profile path) cannot be opened. Such paths are
+    // replaced by their ASCII 8.3 short name; when none exists the bytes go
+    // through stdin instead (Tesseract switches stdin to binary on Windows).
+    let arg_path = crate::util::process::ansi_safe_path(path);
+    let stdin_bytes = if cfg!(target_os = "macos") || arg_path.is_none() {
         match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
             Err(_) => return OcrOutcome::NoText,
@@ -581,16 +669,23 @@ fn tesseract_ocr(path: &Path) -> crate::ocr::OcrOutcome {
     if stdin_bytes.is_some() {
         command.arg("stdin").stdin(Stdio::piped());
     } else {
-        command.arg(path).stdin(Stdio::null());
+        command
+            .arg(arg_path.as_deref().unwrap_or(path))
+            .stdin(Stdio::null());
+    }
+    command.arg("stdout");
+    if let Some(langs) = tesseract_lang_arg(cyrillic_ocr(), &tesseract_languages()) {
+        command.args(["-l", &langs]);
     }
     command
-        .args(["stdout", "--psm", "3"]) // Fully automatic page segmentation
+        .args(["--psm", "3"]) // Fully automatic page segmentation
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
     // Prefer Kensaku's private language data when it has been downloaded, but
     // never override a working system installation.
     if let Some(dir) = private_tessdata(&tessdata_dir()) {
+        let dir = crate::util::process::ansi_safe_path(&dir).unwrap_or(dir);
         command.env("TESSDATA_PREFIX", dir);
     }
 
@@ -1079,6 +1174,42 @@ mod tests {
             .and_then(|m| m.modified())
             .expect("mtime");
         assert_eq!(mtime, mtime2, "fresh thumbnail must be reused");
+    }
+
+    /// Real Tesseract on a Russian screenshot. Needs `tesseract` with `rus`
+    /// data and a PNG at `KENSAKU_RU_OCR_IMAGE`; skipped otherwise.
+    #[test]
+    #[ignore]
+    fn tesseract_reads_cyrillic_when_enabled() {
+        let Some(image) = std::env::var_os("KENSAKU_RU_OCR_IMAGE") else {
+            return;
+        };
+        let path = std::path::PathBuf::from(image);
+        set_cyrillic_ocr(false);
+        reset_tesseract_probe();
+        let latin = tesseract_ocr(&path);
+        set_cyrillic_ocr(true);
+        reset_tesseract_probe();
+        let cyrillic = tesseract_ocr(&path);
+        set_cyrillic_ocr(false);
+        println!("default: {latin:?}\nrus+eng: {cyrillic:?}");
+        let crate::ocr::OcrOutcome::Text(text) = cyrillic else {
+            panic!("no text: {cyrillic:?}");
+        };
+        assert!(text.contains("Ошибка подключения"), "{text}");
+        assert!(text.contains("Kaspersky"), "{text}");
+    }
+
+    #[test]
+    fn tesseract_lang_arg_reads_russian_only_when_wanted_and_installed() {
+        let both = vec!["eng".to_string(), "rus".to_string(), "osd".to_string()];
+        assert_eq!(tesseract_lang_arg(true, &both).as_deref(), Some("rus+eng"));
+        assert_eq!(tesseract_lang_arg(false, &both), None);
+        assert_eq!(tesseract_lang_arg(true, &["eng".to_string()]), None);
+        assert_eq!(
+            tesseract_lang_arg(true, &["rus".to_string()]).as_deref(),
+            Some("rus")
+        );
     }
 
     #[test]

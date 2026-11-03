@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X, Terminal, Search } from "lucide-react";
+import { t, tn, useLanguage } from "../i18n";
 
 /* Search capsule. One floating control, Spotlight-style: glyph, 22px query,
    result count, clear, settings. Solid surface,
@@ -28,6 +29,7 @@ export function SearchBar({
   total,
   trailing,
 }: SearchBarProps) {
+  useLanguage();
   const [phIdx, setPhIdx] = useState(0);
   const rotateRef = useRef(false);
 
@@ -57,23 +59,23 @@ export function SearchBar({
           autoComplete="off"
           autoFocus
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={isCommandMode ? "Command" : PLACEHOLDERS[phIdx]}
+          placeholder={isCommandMode ? t("Command") : t(PLACEHOLDERS[phIdx])}
           onFocus={onFocusInput}
-          aria-label="Search"
+          aria-label={t("Search")}
           className="min-w-0 flex-1 bg-transparent text-[19px] font-medium leading-none tracking-[-0.022em] text-fg outline-none placeholder:font-normal placeholder:text-subtle"
           style={{ caretColor: "var(--blue)" }}
         />
 
         {query && !isCommandMode && (
           <span key={count} className="t-meta fade-in shrink-0 text-subtle">
-            {count === 0 ? "No results" : `${count.toLocaleString("en-US")} ${count === 1 ? "result" : "results"}`}
+            {count === 0 ? t("No results") : tn(count, "{n} result", "{n} results")}
           </span>
         )}
 
         {query && (
           <button
             type="button"
-            title="Clear (Esc)"
+            title={t("Clear (Esc)")}
             onClick={() => {
               setQuery("");
               inputRef.current?.focus();

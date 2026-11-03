@@ -2,6 +2,7 @@ import React from "react";
 import type { IndexingStatus, DoctorReport } from "../types";
 import { formatComma } from "../lib/format";
 import { Stethoscope, ArrowUpCircle } from "lucide-react";
+import { t, tn, useLanguage } from "../i18n";
 
 /* Status line. Index health on the left, the few keys worth knowing on the
    right. Quiet by default: it only takes the ink while indexing. */
@@ -15,17 +16,19 @@ const HINTS: { keys: string; label: string }[] = [
 
 function statusText(s: IndexingStatus | null | undefined): { text: string; busy: boolean } {
   if (!s) return { text: "", busy: false };
-  if (s.paused) return { text: "Indexing paused", busy: false };
+  if (s.paused) return { text: t("Indexing paused"), busy: false };
   if (s.is_indexing || (s.phase && s.phase !== "idle")) {
-    if (s.phase === "rebuilding") return { text: s.current_status || "Rebuilding index…", busy: true };
+    if (s.phase === "rebuilding") return { text: s.current_status || t("Rebuilding index…"), busy: true };
     const done = s.extract_done ?? s.files_indexed;
     const total = s.extract_total ?? s.total_files;
     return {
-      text: total ? `Indexing ${formatComma(done)} of ${formatComma(total)}` : `Indexing ${formatComma(done)} files`,
+      text: total
+        ? t("Indexing {done} of {total}", { done: formatComma(done), total: formatComma(total) })
+        : tn(done, "Indexing {n} file", "Indexing {n} files"),
       busy: true,
     };
   }
-  return { text: `${formatComma(s.files_indexed)} files`, busy: false };
+  return { text: tn(s.files_indexed, "{n} file", "{n} files"), busy: false };
 }
 
 export const KeyHintStrip: React.FC<{
@@ -35,6 +38,7 @@ export const KeyHintStrip: React.FC<{
   onDoctor?: () => void;
   onUpdate?: () => void;
 }> = ({ status, doctor, updateAvailable, onDoctor, onUpdate }) => {
+  useLanguage();
   const { text, busy } = statusText(status);
   const issues = doctor ? doctor.summary.warn + doctor.summary.fail : 0;
   return (
@@ -50,22 +54,22 @@ export const KeyHintStrip: React.FC<{
           <button
             type="button"
             onClick={onDoctor}
-            title={issues ? `${issues} health issue${issues === 1 ? "" : "s"} — open Health` : "Index health OK"}
+            title={issues ? tn(issues, "{n} health issue — open Health", "{n} health issues — open Health") : t("Index health OK")}
             className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 transition-colors hover:bg-surface-2 ${issues ? "text-warning" : "text-subtle"}`}
           >
             <Stethoscope className="h-3.5 w-3.5" />
-            {issues > 0 && <span className="t-meta">{issues} issue{issues === 1 ? "" : "s"}</span>}
+            {issues > 0 && <span className="t-meta">{tn(issues, "{n} issue", "{n} issues")}</span>}
           </button>
         )}
         {updateAvailable && (
           <button
             type="button"
             onClick={onUpdate}
-            title={`Update available: ${updateAvailable}`}
+            title={t("Update available: {version}", { version: updateAvailable })}
             className="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-accent transition-colors hover:bg-surface-2"
           >
             <ArrowUpCircle className="h-3.5 w-3.5" />
-            <span className="t-meta">Update</span>
+            <span className="t-meta">{t("Update")}</span>
           </button>
         )}
       </span>
@@ -73,7 +77,7 @@ export const KeyHintStrip: React.FC<{
         {HINTS.map((h) => (
           <span key={h.label} className="flex items-center gap-1.5">
             <span className="kbd">{h.keys}</span>
-            <span>{h.label}</span>
+            <span>{t(h.label)}</span>
           </span>
         ))}
       </span>

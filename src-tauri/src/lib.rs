@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod doctor;
 pub mod embed;
 pub mod indexer;
+pub mod locale;
 pub mod models;
 pub mod main_window;
 pub mod ocr;
@@ -238,6 +239,7 @@ pub fn run() {
     let config = KensakuConfig::load();
     indexer::extract::set_ocr_enabled(config.ocr_enabled);
     indexer::extract::image::set_ocr_max_image_bytes(config.ocr_max_image_bytes);
+    indexer::extract::image::set_cyrillic_ocr(crate::locale::wants_cyrillic(&config.language));
     indexer::extract::set_content_caps(config.content_max_file_size_mb, config.content_max_text_bytes);
     crate::embed::set_max_semantic_units(config.content_max_semantic_units);
     ocr::set_engine(&config.ocr_engine);
@@ -247,9 +249,16 @@ pub fn run() {
     // during setup or an interrupted first run cannot leave the app without
     // a working OCR engine. Downloads run in the background and re-queue
     // images through the OCR pack ready callback once they finish.
-    if !crate::indexer::extract::image::tesseract_usable() {
-        std::thread::spawn(|| {
+    let cyrillic = crate::locale::wants_cyrillic(&config.language);
+    if !crate::indexer::extract::image::tesseract_usable() || cyrillic {
+        std::thread::spawn(move || {
             let _ = crate::indexer::extract::image::download_eng_tessdata();
+            // Russian data for screenshots and scans on Cyrillic systems. Kept
+            // beside `eng` in the private tessdata dir, which Tesseract then
+            // uses for both languages.
+            if cyrillic {
+                let _ = crate::indexer::extract::image::download_rus_tessdata();
+            }
         });
     }
     if crate::ocr::accurate_compiled() && crate::ocr::runtime_loadable() {
@@ -338,6 +347,8 @@ pub fn run() {
             commands::download_ocr_pack,
             commands::get_indra_pack_status,
             commands::download_indra_pack,
+            commands::get_multilingual_status,
+            commands::download_multilingual_model,
             commands::get_smart_pack_status,
             commands::download_smart_pack,
             commands::get_visual_pack_status,
@@ -378,12 +389,14 @@ pub fn run() {
             // file, and we toggle the window here. Cheap: one stat every 150 ms.
             {
                 let handle = app.handle().clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                    let path = toggle_request_path();
-                    if path.exists() {
-                        let _ = std::fs::remove_file(&path);
-                        main_window::toggle(&handle);
+                std::thread::spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        let path = toggle_request_path();
+                        if path.exists() {
+                            let _ = std::fs::remove_file(&path);
+                            main_window::toggle(&handle);
+                        }
                     }
                 });
             }
@@ -410,8 +423,14 @@ pub fn run() {
             }
 
             // 2. Setup System Tray
-            let show_item = MenuItem::with_id(app, "toggle", "Open Search", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit Kensaku", true, None::<&str>)?;
+            // Tray labels follow the interface language (read at startup).
+            let (open_label, quit_label) =
+                match crate::locale::resolve(&KensakuConfig::load().language).as_str() {
+                    "ru" => ("Открыть поиск", "Выйти из Kensaku"),
+                    _ => ("Open Search", "Quit Kensaku"),
+                };
+            let show_item = MenuItem::with_id(app, "toggle", open_label, true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
             // Windows users expect a click on the tray icon to offer the

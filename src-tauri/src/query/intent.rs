@@ -76,6 +76,23 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
             (r"(?i)\b(?:latest|newest|most recent)\b", "newest", "Newest"),
             (r"(?i)\boldest\b", "oldest", "Oldest"),
             (r"(?i)\b(?:biggest|largest)\b", "largest", "Largest"),
+            // Russian. Sort words go first so "самые большие" is a sort,
+            // not the plain "большие" size filter below.
+            (
+                r"(?i)\b(?:последн(?:ий|яя|ее|ие|юю|его|ей|их)|свеж(?:ий|ая|ее|ие|ую|их)|новейш\w*|самы[йеях]\w*\s+нов\w*)\b",
+                "newest",
+                "Newest",
+            ),
+            (
+                r"(?i)\b(?:старейш\w*|самы[йеях]\w*\s+стар\w*)\b",
+                "oldest",
+                "Oldest",
+            ),
+            (
+                r"(?i)\b(?:крупнейш\w*|самы[йеях]\w*\s+(?:больш|крупн|тяж[её]л)\w*)\b",
+                "largest",
+                "Largest",
+            ),
         ] {
             if sort.is_none()
                 && let Ok(re) = Regex::new(pat)
@@ -119,6 +136,37 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 "modified:<365d",
                 "Modified: last year",
             ),
+            // Russian
+            (
+                r"(?i)\b(?:за\s+)?(?:сегодня|сегодняшн\w*)\b",
+                "modified:<1d",
+                "Modified: today",
+            ),
+            (
+                r"(?i)\bпозавчера\b",
+                "modified:2d..3d",
+                "Modified: 2 days ago",
+            ),
+            (
+                r"(?i)\b(?:вчера|вчерашн\w*)\b",
+                "modified:1d..2d",
+                "Modified: yesterday",
+            ),
+            (
+                r"(?i)\b(?:(?:за|на|в)\s+)?(?:(?:эт(?:ой|у|а)|прошл(?:ой|ую|ая)|последн(?:юю|ей|яя))\s+)?недел[еюия]\b",
+                "modified:<7d",
+                "Modified: last 7 days",
+            ),
+            (
+                r"(?i)\b(?:(?:за|в)\s+)?(?:(?:это[тм]|прошл(?:ый|ом)|последн(?:ий|ем))\s+)?месяц[еа]?\b",
+                "modified:<30d",
+                "Modified: last 30 days",
+            ),
+            (
+                r"(?i)\b(?:(?:за|в)\s+)?(?:это[тм]|прошл(?:ый|ом)|последн(?:ий|ем))\s+год[уа]?\b",
+                "modified:<365d",
+                "Modified: last year",
+            ),
         ] {
             if let Ok(re) = Regex::new(pat) {
                 take(
@@ -147,6 +195,16 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 days_ago_days as fn(&str, u32) -> Option<u32>,
                 "Modified: days ago",
             ),
+            (
+                r"(?i)\b(?:в(?:о)?\s+)?прошл(?:ый|ую|ое|ая)\s+(понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье)\b",
+                weekday_days_back as fn(&str, u32) -> Option<u32>,
+                "Modified: last",
+            ),
+            (
+                r"(?i)\b(\d{1,3})\s+(?:дн(?:я|ей)|день)\s+назад\b",
+                days_ago_days as fn(&str, u32) -> Option<u32>,
+                "Modified: days ago",
+            ),
         ] {
             if let Ok(re) = Regex::new(pat)
                 && let Some(m) = re.captures(&work)
@@ -170,13 +228,13 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
         }
 
         // --- Size -------------------------------------------------------
-        if let Ok(re) =
-            Regex::new(r"(?i)\b(?:under|less than|smaller than)\s+(\d+(?:\.\d+)?)\s*(kb|mb|gb)\b")
-            && let Some(c) = re.captures(&work)
+        if let Ok(re) = Regex::new(
+            r"(?i)\b(?:under|less than|smaller than|меньше|менее|до)\s+(\d+(?:[.,]\d+)?)\s*(kb|mb|gb|кб|мб|гб)\b",
+        ) && let Some(c) = re.captures(&work)
         {
-            let number = c[1].to_string();
-            let unit = c[2].to_string();
-            let raw = format!("size:<{}{}", number, unit.to_lowercase());
+            let number = c[1].replace(',', ".");
+            let unit = latin_size_unit(&c[2]);
+            let raw = format!("size:<{}{}", number, unit);
             let source = c.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
             work = re.replace(&work, " ").to_string();
             appends.push(raw.clone());
@@ -188,12 +246,12 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
             });
         }
         if let Ok(re) = Regex::new(
-            r"(?i)\b(?:over|more than|larger than|bigger than)\s+(\d+(?:\.\d+)?)\s*(kb|mb|gb)\b",
+            r"(?i)\b(?:over|more than|larger than|bigger than|больше|более|свыше|от)\s+(\d+(?:[.,]\d+)?)\s*(kb|mb|gb|кб|мб|гб)\b",
         ) && let Some(c) = re.captures(&work)
         {
-            let number = c[1].to_string();
-            let unit = c[2].to_string();
-            let raw = format!("size:>{}{}", number, unit.to_lowercase());
+            let number = c[1].replace(',', ".");
+            let unit = latin_size_unit(&c[2]);
+            let raw = format!("size:>{}{}", number, unit);
             let source = c.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
             work = re.replace(&work, " ").to_string();
             appends.push(raw.clone());
@@ -211,6 +269,16 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 "Size: over 100 MB",
             ),
             (r"(?i)\b(?:tiny|small)\b", "size:<1mb", "Size: under 1 MB"),
+            (
+                r"(?i)\b(?:огромн\w*|больш(?:ой|ая|ое|ие|их|ую)|тяж[её]л\w*)\b",
+                "size:>100mb",
+                "Size: over 100 MB",
+            ),
+            (
+                r"(?i)\b(?:маленьк\w*|мелк\w*|крошечн\w*)\b",
+                "size:<1mb",
+                "Size: under 1 MB",
+            ),
         ] {
             if let Ok(re) = Regex::new(pat) {
                 take(
@@ -270,15 +338,18 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 "type:doc",
                 "Type: documents",
             ),
+            // Office tables and decks have their own types: `type:doc` covers
+            // text documents only (no .xlsx/.pptx), so mapping these words to
+            // it matched none of the files they name.
             (
                 r"(?i)\b(?:spreadsheets?|excel)\b",
-                "type:doc",
-                "Type: documents",
+                "type:sheet",
+                "Type: spreadsheets",
             ),
             (
                 r"(?i)\b(?:presentations?|slides?)\b",
-                "type:doc",
-                "Type: documents",
+                "type:presentation",
+                "Type: presentations",
             ),
             (
                 r"(?i)\b(?:folders?|directories|directory)\b",
@@ -291,6 +362,54 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 "Type: archives",
             ),
             (r"(?i)\blogs?\b", "ext:log", "Type: logs"),
+            // Russian (word stems cover the case endings).
+            (
+                r"(?i)\b(?:скриншот\w*|скрин(?:ы|ов|ах)?|снимк\w*|снимок|картинк\w*|изображени[еяйю]\w*|фото\w*)\b",
+                "type:image",
+                "Type: images",
+            ),
+            (r"(?i)\bпдф\w*\b", "ext:pdf", "Type: PDF"),
+            (
+                r"(?i)\b(?:видео\w*|ролик\w*|фильм\w*)\b",
+                "type:media",
+                "Type: media",
+            ),
+            (
+                r"(?i)\b(?:аудио\w*|музык\w*|песн\w*|песен)\b",
+                "type:media",
+                "Type: media",
+            ),
+            (
+                r"(?i)\b(?:исходник\w*|исходн(?:ый|ого|ом)\s+код\w*)\b",
+                "type:code",
+                "Type: code",
+            ),
+            (
+                r"(?i)\b(?:документ\w*|доки|доков)\b",
+                "type:doc",
+                "Type: documents",
+            ),
+            (
+                r"(?i)\b(?:таблиц\w*|эксел\w*|ексел\w*)\b",
+                "type:sheet",
+                "Type: spreadsheets",
+            ),
+            (
+                r"(?i)\b(?:презентаци\w*|презент\w*|слайд\w*)\b",
+                "type:presentation",
+                "Type: presentations",
+            ),
+            (
+                r"(?i)\b(?:папк[аиуе]|папок|каталог\w*|директори\w*)\b",
+                "type:dir",
+                "Type: folders",
+            ),
+            (r"(?i)\bархив\w*\b", "type:archive", "Type: archives"),
+            (
+                r"(?i)\b(?:лог(?:и|ов|ах)?|журнал(?:ы|ов)?)\b",
+                "ext:log",
+                "Type: logs",
+            ),
         ] {
             if let Ok(re) = Regex::new(pat) {
                 take(
@@ -343,7 +462,41 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                     source: term.to_string(),
                 });
             }
-            if let Some(c) = re.captures(&work) {
+            // Russian names of the standard folders. On a Russian Windows the
+            // folders on disk are still "Downloads", "Documents"... (only the
+            // shell shows translated names), so they map to those names.
+            if let Ok(ru) = Regex::new(
+                r"(?i)\b(?:в|на|из)\s+(?:мо(?:их|ей|ём|ем)\s+)?(?:папке\s+)?(загрузк(?:ах|и)|скачанн\w*|документах|рабоч(?:ем|ий)\s+стол[еа]?|изображениях|картинках|видео|музыке|проектах)\b",
+            ) && let Some(c) = ru.captures(&work)
+            {
+                let word = c[1].to_lowercase();
+                let place = if word.starts_with("загрузк") || word.starts_with("скачанн")
+                {
+                    "downloads"
+                } else if word.starts_with("документ") {
+                    "documents"
+                } else if word.starts_with("рабоч") {
+                    "desktop"
+                } else if word.starts_with("изображ") || word.starts_with("картин") {
+                    "pictures"
+                } else if word.starts_with("видео") {
+                    "videos"
+                } else if word.starts_with("музык") {
+                    "music"
+                } else {
+                    "projects"
+                };
+                let raw = format!("in:{}", place);
+                let source = c.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
+                work = ru.replace(&work, " ").to_string();
+                appends.push(raw.clone());
+                chips.push(InterpretationChip {
+                    kind: "place".to_string(),
+                    label: format!("In: {}", place),
+                    raw,
+                    source,
+                });
+            } else if let Some(c) = re.captures(&work) {
                 let place = c[1].to_string();
                 let raw = format!("in:{}", place);
                 let source = c.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
@@ -368,7 +521,9 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
     }
 
     // Drop connective filler left behind once the intent words are removed.
-    if let Ok(re) = Regex::new(r"(?i)\b(?:from|the|a|an|my|me|show|find|get|give|all|some|of)\b") {
+    if let Ok(re) = Regex::new(
+        r"(?i)\b(?:from|the|a|an|my|me|show|find|get|give|all|some|of|за|со?|от|из|мо[йиюяё]|моих|покажи|найди|найти|дай|все|всё|какие-нибудь)\b",
+    ) {
         work = re.replace_all(&work, " ").to_string();
     }
 
@@ -434,6 +589,63 @@ mod tests {
     }
 
     #[test]
+    fn russian_screenshots_last_week() {
+        let intent = compile("скриншоты за прошлую неделю");
+        assert!(intent.query.contains("type:image"), "{}", intent.query);
+        assert!(intent.query.contains("modified:<7d"), "{}", intent.query);
+        assert!(!intent.query.contains("за"), "{}", intent.query);
+    }
+
+    #[test]
+    fn russian_sort_size_and_place() {
+        let intent = compile("самые большие видео в загрузках");
+        assert_eq!(intent.sort.as_deref(), Some("largest"));
+        assert!(intent.query.contains("type:media"), "{}", intent.query);
+        assert!(intent.query.contains("in:downloads"), "{}", intent.query);
+
+        let intent = compile("последний договор pdf больше 5 мб");
+        assert_eq!(intent.sort.as_deref(), Some("newest"));
+        assert!(intent.query.contains("size:>5mb"), "{}", intent.query);
+        assert!(intent.query.starts_with("договор"), "{}", intent.query);
+    }
+
+    #[test]
+    fn russian_relative_days() {
+        let intent = compile("счёт 3 дня назад");
+        assert!(intent.query.contains("modified:3d..4d"), "{}", intent.query);
+        assert!(intent.query.starts_with("счёт"), "{}", intent.query);
+
+        let intent = compile("отчёт вчера");
+        assert!(intent.query.contains("modified:1d..2d"), "{}", intent.query);
+
+        let intent = compile("акт в прошлую пятницу");
+        assert!(intent.chips.iter().any(|c| c.kind == "time"));
+        assert_eq!(intent.query.split_whitespace().next(), Some("акт"));
+    }
+
+    #[test]
+    fn decks_and_tables_use_their_own_types() {
+        assert!(
+            compile("slides about pricing")
+                .query
+                .contains("type:presentation")
+        );
+        assert!(
+            compile("презентация вендора")
+                .query
+                .contains("type:presentation")
+        );
+        assert!(compile("таблица бюджета").query.contains("type:sheet"));
+    }
+
+    #[test]
+    fn russian_plain_query_is_untouched() {
+        let intent = compile("лицензии касперский");
+        assert!(intent.chips.is_empty());
+        assert_eq!(intent.query, "лицензии касперский");
+    }
+
+    #[test]
     fn plain_query_is_untouched() {
         let intent = compile("docker error");
         assert!(intent.chips.is_empty());
@@ -455,7 +667,15 @@ fn chrono_weekday_today() -> u32 {
 
 /// Days back from today to the most recent given weekday, never today itself.
 fn weekday_days_back(name: &str, today: u32) -> Option<u32> {
-    let target = match name.to_ascii_lowercase().as_str() {
+    let lower = name.to_lowercase();
+    let target = match lower.as_str() {
+        "понедельник" => 0,
+        "вторник" => 1,
+        "среда" | "среду" => 2,
+        "четверг" => 3,
+        "пятница" | "пятницу" => 4,
+        "суббота" | "субботу" => 5,
+        "воскресенье" => 6,
         "monday" => 0,
         "tuesday" => 1,
         "wednesday" => 2,
@@ -467,6 +687,16 @@ fn weekday_days_back(name: &str, today: u32) -> Option<u32> {
     };
     let back = (today + 7 - target) % 7;
     Some(if back == 0 { 7 } else { back })
+}
+
+/// Size unit as the query grammar spells it (`мб` → `mb`).
+fn latin_size_unit(unit: &str) -> String {
+    match unit.to_lowercase().as_str() {
+        "кб" => "kb".to_string(),
+        "мб" => "mb".to_string(),
+        "гб" => "gb".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// "N days ago" is N days back, with a floor of one day.

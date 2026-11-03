@@ -5,6 +5,7 @@ import React from "react";
 import { Check, Plus, ArrowRight, ArrowLeft, LoaderCircle, Sun, Moon, Download, X, FolderOpen, Minus } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import type { IndexingStatus, OcrEngine, OcrStatus, ModelsStatus } from "../types";
+import { getLanguage, setLanguageSetting, t, tn, useLanguage, locale } from "../i18n";
 
 /* First run: three screens, one decision each.
    1 Welcome → 2 Pick folders → 3 Exclusions + start. */
@@ -19,12 +20,12 @@ const DEFAULT_EXCLUSIONS = [
 
 function formatEta(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
-  if (seconds < 60) return `~${Math.max(1, Math.round(seconds))}s left`;
+  if (seconds < 60) return t("~{s}s left", { s: Math.max(1, Math.round(seconds)) });
   const mins = Math.floor(seconds / 60);
   const secs = Math.round(seconds % 60);
-  if (mins < 60) return `~${mins}m ${secs}s left`;
+  if (mins < 60) return t("~{m}m {s}s left", { m: mins, s: secs });
   const hours = Math.floor(mins / 60);
-  return `~${hours}h ${mins % 60}m left`;
+  return t("~{h}h {m}m left", { h: hours, m: mins % 60 });
 }
 
 /* Picks the engine the UI should preselect. Mirrors the backend's startup
@@ -40,6 +41,7 @@ function pickEngine(status: OcrStatus): OcrEngine {
 }
 
 export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void }) {
+  const lang = useLanguage();
   const [step, setStep] = useState<0 | 1 | 2>(0);
   // Start at sign-in is on by default, so the app is one shortcut away after a restart.
   const startAtLogin = true;
@@ -204,12 +206,12 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
       const picked = await open({
         directory: true,
         multiple: true,
-        title: "Choose folders to search",
+        title: t("Choose folders to search"),
       });
       if (!picked) return;
       addDirs(Array.isArray(picked) ? picked : [picked]);
     } catch (err) {
-      setDirError(`Folder picker unavailable here — type a path below instead. (${String(err)})`);
+      setDirError(t("Folder picker unavailable here — type a path below instead. ({error})", { error: String(err) }));
     }
   };
 
@@ -261,7 +263,7 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
       setScanning(true);
     } catch (err) {
       console.error("Setup failed:", err);
-      alert("Setup failed: " + err);
+      alert(t("Setup failed: {error}", { error: String(err) }));
     } finally {
       setIsSubmitting(false);
     }
@@ -284,8 +286,8 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
   const minimizeButton = (
     <button
       type="button"
-      title="Minimize"
-      aria-label="Minimize"
+      title={t("Minimize")}
+      aria-label={t("Minimize")}
       onClick={() => getCurrentWindow().minimize().catch((err) => console.warn("Could not minimize:", err))}
       className="btn btn-ghost btn-icon h-8 !rounded-full"
     >
@@ -294,35 +296,52 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
   );
 
   const themeButton = (
-    <button type="button" title="Theme" onClick={toggle} className="btn btn-ghost btn-icon h-8 !rounded-full">
-      {theme === "light" ? <Moon className="h-4 w-4" strokeWidth={1.75} /> : <Sun className="h-4 w-4" strokeWidth={1.75} />}
-    </button>
+    <>
+      <button
+        type="button"
+        title={t("Interface language")}
+        onClick={() => {
+          // Switch between English and Russian, and keep it in the config.
+          const next = getLanguage() === "ru" ? "en" : "ru";
+          setLanguageSetting(next);
+          invoke<Record<string, unknown>>("get_config")
+            .then((cfg) => invoke("save_config", { config: { ...cfg, language: next } }))
+            .catch(() => undefined);
+        }}
+        className="btn btn-ghost h-8 !rounded-full px-2.5 text-[12px] font-medium"
+      >
+        {lang === "ru" ? "EN" : "RU"}
+      </button>
+      <button type="button" title={t("Theme")} onClick={toggle} className="btn btn-ghost btn-icon h-8 !rounded-full">
+        {theme === "light" ? <Moon className="h-4 w-4" strokeWidth={1.75} /> : <Sun className="h-4 w-4" strokeWidth={1.75} />}
+      </button>
+    </>
   );
 
   if (done) {
     const files = scanStatus?.files_indexed ?? 0;
     const content = scanStatus?.content_indexed ?? 0;
     return (
-      <Shell mark="Ready" trailing={<>{themeButton}{minimizeButton}</>} brand={<BrandMoment word="見つけた" gloss="found it." />}>
+      <Shell mark={t("Ready")} trailing={<>{themeButton}{minimizeButton}</>} brand={<BrandMoment word="見つけた" gloss={t("found it.")} />}>
         <div className="flex flex-1 flex-col justify-center gap-10">
           <div className="space-y-3">
-            <h1 className="t-title rise-in text-fg">Your files are ready.</h1>
+            <h1 className="t-title rise-in text-fg">{t("Your files are ready.")}</h1>
             <p className="t-lead rise-in max-w-sm text-muted" style={{ ["--stagger-delay" as string]: "60ms" }}>
-              Press <span className="kbd align-middle">{shortcut}</span> from anywhere to search.
+              {t("Press")} <span className="kbd align-middle">{shortcut}</span> {t("from anywhere to search.")}
             </p>
             <p className="rise-in max-w-sm text-[12px] leading-[18px] text-blue" style={{ ["--stagger-delay" as string]: "90ms" }}>
-              Closing the window just hides Kensaku, it keeps running in the background. If it seems to disappear, press your shortcut or look in the tray.
+              {t("Closing the window just hides Kensaku, it keeps running in the background. If it seems to disappear, press your shortcut or look in the tray.")}
             </p>
           </div>
           <dl className="rise-in grid grid-cols-2 gap-8" style={{ ["--stagger-delay" as string]: "120ms" }}>
-            <Stat value={files} label="Files" />
-            <Stat value={content} label="Read inside" />
+            <Stat value={files} label={t("Files")} />
+            <Stat value={content} label={t("Read inside")} />
           </dl>
         </div>
         <Footer>
           <span />
           <button type="button" onClick={onSetupCompleted} className="btn btn-primary h-10 px-5">
-            Start searching <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+            {t("Start searching")} <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
           </button>
         </Footer>
       </Shell>
@@ -350,25 +369,25 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
       }
     }
     const phaseLabel: Record<string, string> = {
-      verifying: "Verifying files",
-      walking: "Finding files",
-      extracting: "Reading inside documents",
-      embedding: "Learning what things mean",
-      committing: "Saving the index",
-      paused: "Paused",
-      idle: "Finishing",
+      verifying: t("Verifying files"),
+      walking: t("Finding files"),
+      extracting: t("Reading inside documents"),
+      embedding: t("Learning what things mean"),
+      committing: t("Saving the index"),
+      paused: t("Paused"),
+      idle: t("Finishing"),
     };
 
     return (
-      <Shell mark="Indexing" trailing={<>{themeButton}{minimizeButton}</>} brand={<BrandMoment word="検索" gloss="to search." busy />}>
+      <Shell mark={t("Indexing")} trailing={<>{themeButton}{minimizeButton}</>} brand={<BrandMoment word="検索" gloss={t("to search.")} busy />}>
         <div className="flex flex-1 flex-col justify-center gap-8">
           <div className="space-y-2">
-            <p className="t-meta text-subtle">{phaseLabel[phase] ?? st?.current_status ?? "Starting"}</p>
+            <p className="t-meta text-subtle">{phaseLabel[phase] ?? st?.current_status ?? t("Starting")}</p>
             <p className="font-medium tabular-nums text-fg" style={{ fontSize: 64, lineHeight: 1, letterSpacing: "-0.05em" }}>
-              {doneCount.toLocaleString("en-US")}
+              {doneCount.toLocaleString(locale())}
             </p>
             <p className="t-lead text-muted">
-              {total > 0 ? `of ${total.toLocaleString("en-US")} files` : "files so far"}
+              {total > 0 ? tn(total, "of {n} file", "of {n} files") : t("files so far")}
             </p>
           </div>
           <div className="max-w-sm space-y-2">
@@ -377,12 +396,12 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
             </div>
             <div className="t-meta flex justify-between text-subtle">
               <span>{pct}%</span>
-              <span>{eta || (pct >= 100 ? "Finishing" : "Estimating")}</span>
+              <span>{eta || (pct >= 100 ? t("Finishing") : t("Estimating"))}</span>
             </div>
           </div>
         </div>
         <Footer>
-          <p className="text-[12px] text-subtle">Only the first time. After this, every launch is instant.</p>
+          <p className="text-[12px] text-subtle">{t("Only the first time. After this, every launch is instant.")}</p>
           <span />
         </Footer>
       </Shell>
@@ -403,13 +422,13 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
     <Shell
       mark={`0${step + 1} / 03`}
       trailing={<>{themeButton}{minimizeButton}</>}
-      brand={<BrandMoment word="検索" gloss="to search." />}
+      brand={<BrandMoment word="検索" gloss={t("to search.")} />}
     >
       {step === 0 && (
         <div key="s0" className="section-enter flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto pt-2">
           <div className="space-y-2">
-            <h1 className="t-title text-fg">Where do your files live?</h1>
-            <p className="t-lead text-muted">Pick the folders to search. You can change this later.</p>
+            <h1 className="t-title text-fg">{t("Where do your files live?")}</h1>
+            <p className="t-lead text-muted">{t("Pick the folders to search. You can change this later.")}</p>
           </div>
           <div className="flex flex-col gap-2">
             {[...suggestedDirs, ...selectedDirs.filter((d) => !suggestedDirs.includes(d))].map((dir, i) => {
@@ -449,14 +468,14 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               className="btn btn-secondary h-11 w-full"
             >
               <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
-              Browse for folder…
-              <span className="text-[11px] text-subtle">pick as many as you like</span>
+              {t("Browse for folder…")}
+              <span className="text-[11px] text-subtle">{t("pick as many as you like")}</span>
             </button>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={customDirInput}
-                placeholder="Or type a path — ~ works, commas separate several"
+                placeholder={t("Or type a path — ~ works, commas separate several")}
                 onChange={(e) => setCustomDirInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && addManualDirs()}
                 spellCheck={false}
@@ -467,7 +486,7 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
                 onClick={addManualDirs}
                 disabled={!customDirInput.trim() || dirBusy}
                 className="btn btn-secondary btn-icon h-10 w-10"
-                aria-label="Add folder"
+                aria-label={t("Add folder")}
               >
                 {dirBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" strokeWidth={1.75} />}
               </button>
@@ -484,8 +503,8 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
       {step === 1 && (
         <div key="s1" className="section-enter flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto pt-2">
           <div className="space-y-2">
-            <h1 className="t-title text-fg">Read the text in your images</h1>
-            <p className="t-lead text-muted">Screenshots, scans and photos become searchable. Pick an engine.</p>
+            <h1 className="t-title text-fg">{t("Read the text in your images")}</h1>
+            <p className="t-lead text-muted">{t("Screenshots, scans and photos become searchable. Pick an engine.")}</p>
           </div>
 
           <div className="flex flex-col gap-2">
@@ -493,18 +512,18 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               selected={selectedOcrEngine === "tesseract"}
               onSelect={() => setSelectedOcrEngine("tesseract")}
               name="Tesseract"
-              note="Fast, clean ASCII text; no download needed. Fallback engine."
+              note={t("Fast, clean ASCII text; no download needed. Fallback engine.")}
               ready={Boolean(ocrStatus?.available)}
               busy={ocrBusy}
               disabled={ocrBusy || !ocrStatus?.engine_present}
-              installHint={!ocrStatus || ocrStatus.engine_present ? null : "Not installed"}
+              installHint={!ocrStatus || ocrStatus.engine_present ? null : t("Not installed")}
               onDownload={async () => {
                 setPackError(null);
                 setOcrBusy(true);
                 try {
                   setOcrStatus(await invoke<OcrStatus>("download_ocr_language"));
                 } catch (err) {
-                  setPackError(`Download failed: ${String(err)}`);
+                  setPackError(t("Download failed: {error}", { error: String(err) }));
                 } finally {
                   setOcrBusy(false);
                 }
@@ -514,20 +533,20 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               selected={selectedOcrEngine === "accurate"}
               onSelect={() => setSelectedOcrEngine("accurate")}
               name="PP-OCRv6"
-              note="Recommended. ~6 MB, highest recall on dense UI screenshots, fastest batch throughput."
+              note={t("~6 MB, highest recall on dense UI screenshots, fastest batch throughput. Latin and CJK only — cannot read Cyrillic.")}
               ready={Boolean(ocrPackStatus?.ready)}
               busy={Boolean(ocrPackStatus?.downloading || ocrPackBusy)}
               disabled={Boolean(ocrPackStatus?.downloading) || !ocrStatus?.accurate_compiled}
-              installHint={!ocrStatus?.accurate_compiled ? "Not in this build" : null}
+              installHint={!ocrStatus?.accurate_compiled ? t("Not in this build") : null}
               busyLabel={
                 ocrPackStatus?.downloading && ocrPackStatus.progress
                   ? ocrPackStatus.progress.phase === "verifying"
-                    ? `Verifying ${ocrPackStatus.progress.file}…`
-                    : `Downloading ${Math.round(
+                    ? t("Verifying {file}…", { file: ocrPackStatus.progress.file })
+                    : t("Downloading {pct}%", { pct: Math.round(
                         ((ocrPackStatus.progress.downloaded ?? 0) /
                           Math.max(1, ocrPackStatus.progress.total ?? 1)) *
                           100,
-                      )}%`
+                      ) })
                   : undefined
               }
               onDownload={async () => {
@@ -536,7 +555,7 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
                 try {
                   setOcrPackStatus(await invoke<ModelsStatus>("download_ocr_pack"));
                 } catch (err) {
-                  setPackError(`Download failed: ${String(err)}`);
+                  setPackError(t("Download failed: {error}", { error: String(err) }));
                 } finally {
                   setOcrPackBusy(false);
                 }
@@ -546,20 +565,20 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               selected={selectedOcrEngine === "indra"}
               onSelect={() => setSelectedOcrEngine("indra")}
               name="Indra OCR"
-              note="~27 MB, 80+ languages, rotated/skewed scans; comparable recall, slightly slower."
+              note={t("~27 MB, 80+ languages including Russian, rotated/skewed scans; slightly slower. Recommended for Cyrillic text.")}
               ready={Boolean(indraPackStatus?.ready)}
               busy={Boolean(indraPackStatus?.downloading || indraPackBusy)}
               disabled={Boolean(indraPackStatus?.downloading) || !ocrStatus?.accurate_compiled}
-              installHint={!ocrStatus?.accurate_compiled ? "Not in this build" : null}
+              installHint={!ocrStatus?.accurate_compiled ? t("Not in this build") : null}
               busyLabel={
                 indraPackStatus?.downloading && indraPackStatus.progress
                   ? indraPackStatus.progress.phase === "verifying"
-                    ? `Verifying ${indraPackStatus.progress.file}…`
-                    : `Downloading ${Math.round(
+                    ? t("Verifying {file}…", { file: indraPackStatus.progress.file })
+                    : t("Downloading {pct}%", { pct: Math.round(
                         ((indraPackStatus.progress.downloaded ?? 0) /
                           Math.max(1, indraPackStatus.progress.total ?? 1)) *
                           100,
-                      )}%`
+                      ) })
                   : undefined
               }
               onDownload={async () => {
@@ -568,7 +587,7 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
                 try {
                   setIndraPackStatus(await invoke<ModelsStatus>("download_indra_pack"));
                 } catch (err) {
-                  setPackError(`Download failed: ${String(err)}`);
+                  setPackError(t("Download failed: {error}", { error: String(err) }));
                 } finally {
                   setIndraPackBusy(false);
                 }
@@ -595,13 +614,13 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
       {step === 2 && (
         <div key="s2" className="section-enter flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto pt-2">
           <div className="space-y-2">
-            <h1 className="t-title text-fg">Summon it from anywhere</h1>
-            <p className="t-lead text-muted">Kensaku runs as an ultra-light background daemon. It opens with your shortcut, hides when you click away or press Esc, and stays in the tray.</p>
+            <h1 className="t-title text-fg">{t("Summon it from anywhere")}</h1>
+            <p className="t-lead text-muted">{t("Kensaku runs as an ultra-light background daemon. It opens with your shortcut, hides when you click away or press Esc, and stays in the tray.")}</p>
           </div>
 
           <div className="space-y-4">
               <div className="space-y-1">
-                <p className="text-[13px] text-muted">Esc hides it again. Kensaku keeps running quietly.</p>
+                <p className="text-[13px] text-muted">{t("Esc hides it again. Kensaku keeps running quietly.")}</p>
               </div>
               <button
                 type="button"
@@ -610,21 +629,21 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               >
                 <span className="flex items-center gap-1.5">
                   {capturing ? (
-                    <span className="text-[13px] text-fg">Press a new shortcut…</span>
+                    <span className="text-[13px] text-fg">{t("Press a new shortcut…")}</span>
                   ) : (
                     shortcut.split("+").map((k, i) => (
                       <span key={i} className="kbd !h-7 !min-w-7 !px-2 !text-[12px] text-fg">{k}</span>
                     ))
                   )}
                 </span>
-                <span className="text-[12px] text-subtle">{capturing ? "Esc to cancel" : "Change"}</span>
+                <span className="text-[12px] text-subtle">{capturing ? t("Esc to cancel") : t("Change")}</span>
               </button>
               <p className="text-[12px] text-subtle">
-                On Linux with Wayland, bind a system shortcut to <code className="font-mono text-[11px]">kensaku --toggle</code> if the key doesn't register.
+                {t("On Linux with Wayland, bind a system shortcut to")} <code className="font-mono text-[11px]">kensaku --toggle</code> {t("if the key doesn't register.")}
               </p>
             </div>
           <p className="text-[13px] font-medium leading-[18px] text-blue">
-            Closing the window just hides Kensaku, it keeps running. If it seems to disappear, press your shortcut or look in the tray.
+            {t("Closing the window just hides Kensaku, it keeps running. If it seems to disappear, press your shortcut or look in the tray.")}
           </p>
         </div>
       )}
@@ -632,20 +651,20 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
       <Footer>
         <p className="text-[12px] text-subtle">
           {step === 0
-            ? `${selectedDirs.length} ${selectedDirs.length === 1 ? "folder" : "folders"}`
+            ? tn(selectedDirs.length, "{n} folder", "{n} folders")
             : ocrReady
-              ? "Everything stays on this computer."
-              : `Download ${effectiveOcrEngine === "indra" ? "Indra OCR" : effectiveOcrEngine === "accurate" ? "PP-OCRv6" : "Tesseract"} to continue.`}
+              ? t("Everything stays on this computer.")
+              : t("Download {engine} to continue.", { engine: effectiveOcrEngine === "indra" ? "Indra OCR" : effectiveOcrEngine === "accurate" ? "PP-OCRv6" : "Tesseract" })}
         </p>
         <div className="flex items-center gap-2">
           {step > 0 && (
             <button type="button" onClick={() => setStep((s) => (s > 0 ? ((s - 1) as 0 | 1 | 2) : 0))} className="btn btn-ghost h-10">
-              <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> Back
+              <ArrowLeft className="h-4 w-4" strokeWidth={1.75} /> {t("Back")}
             </button>
           )}
           {step === 0 && (
             <button type="button" onClick={() => setStep(1)} disabled={selectedDirs.length === 0} className="btn btn-primary h-10 px-5">
-              Continue <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+              {t("Continue")} <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
             </button>
           )}
           {step === 1 && (
@@ -655,7 +674,7 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               disabled={selectedDirs.length === 0 || !ocrReady}
               className="btn btn-primary h-10 px-5"
             >
-              Continue <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+              {t("Continue")} <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
             </button>
           )}
           {step === 2 && (
@@ -666,7 +685,7 @@ export function SetupModal({ onSetupCompleted }: { onSetupCompleted: () => void 
               className="btn btn-primary h-10 px-5"
             >
               {isSubmitting && <LoaderCircle className="h-4 w-4 animate-spin" />}
-              Start indexing
+              {t("Start indexing")}
               {!isSubmitting && <ArrowRight className="h-4 w-4" strokeWidth={1.75} />}
             </button>
           )}
@@ -730,7 +749,7 @@ function Stat({ value, label }: { value: number; label: string }) {
   return (
     <div className="space-y-1">
       <dd className="font-medium tabular-nums text-fg" style={{ fontSize: 34, lineHeight: 1, letterSpacing: "-0.04em" }}>
-        {value.toLocaleString("en-US")}
+        {value.toLocaleString(locale())}
       </dd>
       <dt className="t-meta text-subtle">{label}</dt>
     </div>
@@ -785,7 +804,7 @@ function EngineOption({
       </span>
       {ready ? (
         <span className="t-meta flex items-center gap-1.5 text-success">
-          <span className="h-1.5 w-1.5 rounded-full bg-success" /> Ready
+          <span className="h-1.5 w-1.5 rounded-full bg-success" /> {t("Ready")}
         </span>
       ) : installHint ? (
         <span className="text-[12px] text-subtle">{installHint}</span>
@@ -800,7 +819,7 @@ function EngineOption({
           className="btn btn-secondary h-8 px-3 text-[12px]"
         >
           {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" strokeWidth={1.75} />}
-          {busy ? busyLabel ?? "Downloading" : "Download"}
+          {busy ? busyLabel ?? t("Downloading") : t("Download")}
         </button>
       )}
     </div>

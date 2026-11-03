@@ -54,6 +54,41 @@ const ARTIFACTS: [Artifact; 3] = [
     },
 ];
 
+/// Optional multilingual static table (`potion-multilingual-128M`, distilled
+/// from BAAI/bge-m3; 101 languages including Russian). Same 256-dim format as
+/// `potion-base-8M`, with an XLM-R SentencePiece tokenizer. ~530 MB download,
+/// ~130 MB in memory once quantized to i8.
+const MULTILINGUAL_ARTIFACTS: [Artifact; 3] = [
+    Artifact {
+        name: "model.safetensors",
+        urls: &[
+            "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/model.safetensors",
+            "https://hf-mirror.com/minishlab/potion-multilingual-128M/resolve/main/model.safetensors",
+        ],
+        // Upper bound for progress; the SHA-256 is what is verified.
+        bytes_expected: 512_400_000,
+        sha256: Some("14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397"),
+    },
+    Artifact {
+        name: "tokenizer.json",
+        urls: &[
+            "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/tokenizer.json",
+            "https://hf-mirror.com/minishlab/potion-multilingual-128M/resolve/main/tokenizer.json",
+        ],
+        bytes_expected: 18_700_000,
+        sha256: Some("19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1"),
+    },
+    Artifact {
+        name: "config.json",
+        urls: &[
+            "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/config.json",
+            "https://hf-mirror.com/minishlab/potion-multilingual-128M/resolve/main/config.json",
+        ],
+        bytes_expected: 271,
+        sha256: None,
+    },
+];
+
 /// Optional accurate OCR pack (PP-OCRv6 tiny detector + recognizer + dict).
 const OCR_ARTIFACTS: [Artifact; 3] = [
     Artifact {
@@ -338,6 +373,24 @@ pub fn ocr_status() -> ModelsStatus {
 
 pub fn indra_status() -> ModelsStatus {
     status_for(&crate::ocr_indra::pack_dir(), &INDRA_ARTIFACTS)
+}
+
+pub fn multilingual_dir() -> PathBuf {
+    models_dir().join("multilingual")
+}
+
+pub fn multilingual_status() -> ModelsStatus {
+    status_for(&multilingual_dir(), &MULTILINGUAL_ARTIFACTS)
+}
+
+/// Starts a background download of the multilingual semantic model.
+pub fn download_multilingual() {
+    start_download(
+        multilingual_dir(),
+        &MULTILINGUAL_ARTIFACTS,
+        "kensaku-multilingual-download",
+        "multilingual model",
+    );
 }
 
 pub fn smart_dir() -> PathBuf {
@@ -756,9 +809,21 @@ fn sha256_matches(path: &Path, expected: Option<&str>) -> Result<bool, String> {
 
 fn sha256_file(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let digest = Sha256::digest(bytes);
+    // Stream the file: the multilingual table is >500 MB.
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
     Ok(format!("{:x}", digest))
 }
 

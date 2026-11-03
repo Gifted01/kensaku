@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { formatBytes, formatRelativeTime } from "../lib/format";
 import type { SearchResult } from "../types";
+import { t, useLanguage } from "../i18n";
 
 /* Hover info. A slim bar rises from the card's bottom edge on hover: the
    modified date, the size, and image dimensions when known. It fades in
@@ -14,6 +15,7 @@ interface Details {
 }
 
 export function HoverDetails({ result }: { result: SearchResult }) {
+  useLanguage();
   const [details, setDetails] = useState<Details>({});
 
   useEffect(() => {
@@ -30,7 +32,7 @@ export function HoverDetails({ result }: { result: SearchResult }) {
   }, [result.path, result.is_dir]);
 
   const parts = [
-    result.is_dir ? "Folder" : formatBytes(result.file_size),
+    result.is_dir ? t("Folder") : formatBytes(result.file_size),
     details.width && details.height ? `${details.width}×${details.height}` : null,
     formatRelativeTime(result.modified),
   ].filter(Boolean) as string[];

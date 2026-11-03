@@ -7,7 +7,14 @@ use rayon::prelude::*;
 pub fn compute_char_mask(text: &str) -> u64 {
     let mut mask = 0u64;
     for ch in text.chars() {
-        let ch_lower = ch.to_ascii_lowercase();
+        // Unicode lowercase: matching is case-insensitive for every script,
+        // and an ASCII-only fold made "Д" and "д" set different bits, so the
+        // prefilter rejected "Договор.pdf" for the query "договор".
+        let ch_lower = if ch.is_ascii() {
+            ch.to_ascii_lowercase()
+        } else {
+            ch.to_lowercase().next().unwrap_or(ch)
+        };
         let bit = match ch_lower {
             'a'..='z' => ch_lower as u8 - b'a',
             '0'..='9' => 26 + (ch_lower as u8 - b'0'),
@@ -16,7 +23,7 @@ pub fn compute_char_mask(text: &str) -> u64 {
             '.' => 38,
             '/' | '\\' => 39,
             ' ' => 40,
-            _ => 41 + ((ch as u32 % 23) as u8),
+            _ => 41 + ((ch_lower as u32 % 23) as u8),
         };
         mask |= 1u64 << (bit & 63);
     }
@@ -166,6 +173,30 @@ mod tests {
             ino: 0,
             content_pending: false,
         }
+    }
+
+    #[test]
+    fn cyrillic_names_match_case_insensitively() {
+        let entries: Vec<FileEntry> = [
+            "Документы/Договор поставки Касперский.pdf",
+            "Документы/Счёт на оплату.xlsx",
+            "notes.md",
+        ]
+        .into_iter()
+        .map(entry)
+        .collect();
+        let all: Vec<usize> = (0..entries.len()).collect();
+        let mut searcher = FuzzySearcher::new();
+
+        let hits = searcher.search("договор", &entries, &all, 10);
+        assert_eq!(
+            hits.first().map(|h| h.0),
+            Some(0),
+            "lowercase query, capitalized name"
+        );
+        let hits = searcher.search("КАСПЕРСКИЙ", &entries, &all, 10);
+        assert_eq!(hits.first().map(|h| h.0), Some(0), "uppercase query");
+        assert_eq!(compute_char_mask("Д"), compute_char_mask("д"));
     }
 
     fn fixture() -> Vec<FileEntry> {

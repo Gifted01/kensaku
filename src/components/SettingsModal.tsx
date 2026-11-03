@@ -32,6 +32,8 @@ import { StatsForNerds } from "./settings/stats";
 import { DoctorSection } from "./settings/doctor";
 import { ModelFilesCard } from "./settings/models";
 import { formatBytes, formatComma } from "../lib/format";
+import { MultilingualModelCard } from "./settings/multilingual";
+import { LANGUAGES, getLanguageSetting, setLanguageSetting, t, useLanguage } from "../i18n";
 
 export interface SettingsProps {
   onClose: () => void;
@@ -96,6 +98,7 @@ const EXCLUSION_PRESETS: Record<string, string[]> = {
    Config edits are local until Save; theme applies immediately. */
 
 export function Settings({ onClose, initialSection, onConfigSaved }: SettingsProps) {
+  useLanguage();
   const [section, setSection] = useState<SectionId>(
     (SECTIONS.find((s) => s.id === initialSection)?.id ?? "general") as SectionId,
   );
@@ -148,7 +151,7 @@ export function Settings({ onClose, initialSection, onConfigSaved }: SettingsPro
       }
     } catch (err) {
       console.error("Save failed:", err);
-      alert("Failed to save settings: " + err);
+      alert(t("Failed to save settings: {error}", { error: String(err) }));
     } finally {
       setSaving(false);
     }
@@ -157,7 +160,7 @@ export function Settings({ onClose, initialSection, onConfigSaved }: SettingsPro
   return (
     <div className="fade-in absolute inset-0 z-40 flex bg-bg">
       <nav data-tauri-drag-region className="relative z-10 flex w-[200px] shrink-0 flex-col overflow-y-auto px-3 pb-3 pt-5">
-        <p data-tauri-drag-region className="t-title px-3 pb-4 text-fg">Settings</p>
+        <p data-tauri-drag-region className="t-title px-3 pb-4 text-fg">{t("Settings")}</p>
         <div className="flex flex-col gap-0.5">
           {SECTIONS.map((s) => {
             const active = section === s.id;
@@ -173,7 +176,7 @@ export function Settings({ onClose, initialSection, onConfigSaved }: SettingsPro
                 }`}
               >
                 <Icon className={`h-4 w-4 shrink-0 ${active ? "text-fg" : "text-subtle"}`} strokeWidth={1.75} />
-                {s.label}
+                {t(s.label)}
               </button>
             );
           })}
@@ -183,7 +186,7 @@ export function Settings({ onClose, initialSection, onConfigSaved }: SettingsPro
       <main className="surface relative z-10 m-2 ml-0 min-w-0 flex-1 overflow-hidden rounded-sheet">
         <button
           type="button"
-          title="Close (Esc)"
+          title={t("Close (Esc)")}
           onClick={onClose}
           className="btn btn-ghost btn-icon absolute right-4 top-4 z-20 h-8 !rounded-full"
         >
@@ -203,15 +206,15 @@ export function Settings({ onClose, initialSection, onConfigSaved }: SettingsPro
           <div className="control pointer-events-auto flex items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5">
             <span className="flex items-center gap-2 pr-2 text-[12px] text-muted">
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors ${dirty ? "bg-warning" : "bg-success/70"}`} />
-              {dirty ? "Unsaved changes" : saved ? "Saved" : "Up to date"}
+              {dirty ? t("Unsaved changes") : saved ? t("Saved") : t("Up to date")}
             </span>
             <button type="button" onClick={() => handleSave(true)} disabled={saving || !config} className="btn btn-ghost h-8 !rounded-full px-3 text-[12px]">
               <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Save &amp; reindex
+              {t("Save & reindex")}
             </button>
             <button type="button" onClick={() => handleSave(false)} disabled={saving || !config || !dirty} className="btn btn-primary h-8 !rounded-full px-4 text-[12px]">
               {saved ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" strokeWidth={1.75} />}
-              {saved ? "Saved" : saving ? "Saving" : "Save"}
+              {saved ? t("Saved") : saving ? t("Saving") : t("Save")}
             </button>
           </div>
         </footer>
@@ -268,7 +271,7 @@ function SectionShell({ section, children }: { section: SectionId; children: Rea
   return (
     // Keyed by section so each switch replays a short ease-in.
     <div key={section} className="section-enter">
-      <SectionHeader title={meta.title} description={meta.description} />
+      <SectionHeader title={t(meta.title)} description={t(meta.description)} />
       {children}
     </div>
   );
@@ -363,7 +366,7 @@ function GeneralSection({
 
   return (
     <>
-      <Card title="Appearance">
+      <Card title={t("Appearance")}>
         <div className="grid grid-cols-2 gap-4 p-4">
           {(["light", "dark"] as const).map((value) => (
             <ThemeSwatch
@@ -381,8 +384,32 @@ function GeneralSection({
         </div>
       </Card>
 
-      <Card title="Invocation">
-        <Field label="Quick shortcut" description="Press it from anywhere to open search. Click, then press a combo to change it. On Linux Wayland, desktops may block global keys: bind a shortcut to the command kensaku --toggle instead.">
+      <Card title={t("Language")}>
+        <Field
+          label={t("Interface language")}
+          description={t("Also turns on Russian text recognition in screenshots. Tray menu: after a restart.")}
+        >
+          <select
+            value={config.language ?? getLanguageSetting()}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Applies at once, like the theme; Save keeps it.
+              setLanguageSetting(value);
+              setConfig((c) => (c ? { ...c, language: value } : c));
+            }}
+            className="field h-8 w-40 shrink-0"
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.value === "system" ? t("System") : l.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </Card>
+
+      <Card title={t("Invocation")}>
+        <Field label={t("Quick shortcut")} description={t("Press it from anywhere to open search. Click, then press a combo to change it. On Linux Wayland, desktops may block global keys: bind a shortcut to the command kensaku --toggle instead.")}>
           <button
             type="button"
             onClick={() => setCapturing(true)}
@@ -392,11 +419,11 @@ function GeneralSection({
                 : "border-line bg-accent-soft text-fg hover:border-line-strong"
             }`}
           >
-            {capturing ? "press keys…" : config.shortcut}
+            {capturing ? t("press keys…") : config.shortcut}
           </button>
         </Field>
 
-        <Field label="Maximum results" description="Hard ceiling per query. Lower keeps rendering instant.">
+        <Field label={t("Maximum results")} description={t("Hard ceiling per query. Lower keeps rendering instant.")}>
           <Stepper
             value={config.max_results}
             min={25}
@@ -407,9 +434,9 @@ function GeneralSection({
         </Field>
 
         <Field
-          label="Start at login"
+          label={t("Start at login")}
           description={
-            autostart === null ? "Unavailable on this system" : "Launch Kensaku when you sign in."
+            autostart === null ? t("Unavailable on this system") : t("Launch Kensaku when you sign in.")
           }
         >
           <Switch
@@ -420,7 +447,7 @@ function GeneralSection({
         </Field>
         {autostartError && (
           <p className="break-words border-t border-line px-4 py-2 font-mono text-[11px] text-danger">
-            Could not update login item: {autostartError}
+            {t("Could not update login item:")} {autostartError}
           </p>
         )}
       </Card>
@@ -443,9 +470,9 @@ function FoldersSection({
   const { stats } = useStats(null);
 
   const addDir = () => {
-    const t = input.trim();
-    if (t && !config.watched_dirs.includes(t)) {
-      setConfig((c) => (c ? { ...c, watched_dirs: [...c.watched_dirs, t] } : c));
+    const v = input.trim();
+    if (v && !config.watched_dirs.includes(v)) {
+      setConfig((c) => (c ? { ...c, watched_dirs: [...c.watched_dirs, v] } : c));
       setInput("");
     }
   };
@@ -459,9 +486,9 @@ function FoldersSection({
 
   return (
     <>
-      <Card title="Watched directories">
+      <Card title={t("Watched directories")}>
         {config.watched_dirs.length === 0 && (
-          <p className="px-4 py-3 text-[11px] text-subtle">Nothing watched yet.</p>
+          <p className="px-4 py-3 text-[11px] text-subtle">{t("Nothing watched yet.")}</p>
         )}
         {config.watched_dirs.map((dir) => (
           <div
@@ -470,13 +497,13 @@ function FoldersSection({
           >
             <div className="min-w-0">
               <p className="truncate text-[12px] text-fg">
-                {dir.split("/").filter(Boolean).pop() || dir}
+                {dir.split(/[\\/]/).filter(Boolean).pop() || dir}
               </p>
               <p className="truncate font-mono text-[11px] text-subtle">{dir}</p>
             </div>
             <button
               type="button"
-              title={`Stop watching ${dir}`}
+              title={t("Stop watching {dir}", { dir })}
               onClick={() =>
                 setConfig((c) =>
                   c ? { ...c, watched_dirs: c.watched_dirs.filter((d) => d !== dir) } : c,
@@ -511,7 +538,7 @@ function FoldersSection({
           }}
           className="mx-4 my-2.5 flex h-16 items-center justify-center rounded-control border border-dashed border-line text-[11px] text-subtle transition-colors duration-150"
         >
-          Drop folders here to add them for watching
+          {t("Drop folders here to add them for watching")}
         </div>
 
         <div className="flex gap-1.5 border-t border-line p-3">
@@ -530,12 +557,12 @@ function FoldersSection({
             className="btn btn-secondary h-8 px-3 text-[12px]"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add
+            {t("Add")}
           </button>
         </div>
         {stats && stats.index.files > 0 && (
           <p className="border-t border-line px-4 py-2 font-mono text-[11px] text-subtle">
-            {formatComma(stats.index.files)} files indexed across {formatComma(stats.index.dirs)} folders
+            {t("{files} files indexed across {dirs} folders", { files: formatComma(stats.index.files), dirs: formatComma(stats.index.dirs) })}
           </p>
         )}
       </Card>
@@ -562,7 +589,7 @@ function ExclusionsSection({
 
   return (
     <>
-      <Card title="Presets">
+      <Card title={t("Presets")}>
         <div className="flex flex-wrap gap-1.5 px-4 py-3">
           {Object.keys(EXCLUSION_PRESETS).map((p) => (
             <button
@@ -571,20 +598,20 @@ function ExclusionsSection({
               onClick={() => setConfig((c) => (c ? { ...c, excluded_dirs: [...EXCLUSION_PRESETS[p]] } : c))}
               className="flex h-7 items-center rounded-full border border-line px-3 text-[12px] text-muted transition-colors duration-150 hover:border-line-strong hover:text-fg"
             >
-              {p}
+              {t(p)}
             </button>
           ))}
-          <span className="self-center text-[11px] text-subtle">replaces the list below</span>
+          <span className="self-center text-[11px] text-subtle">{t("replaces the list below")}</span>
         </div>
       </Card>
 
-      <Card title="Excluded directory names">
+      <Card title={t("Excluded directory names")}>
         <div className="flex flex-wrap gap-1.5 px-4 py-3">
           {config.excluded_dirs.map((d) => (
             <button
               key={d}
               type="button"
-              title={`Remove ${d}`}
+              title={t("Remove {name}", { name: d })}
               onClick={() => removeDir(d)}
               className="group flex h-6 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 font-mono text-[11px] text-muted transition-colors hover:text-danger"
             >
@@ -596,13 +623,13 @@ function ExclusionsSection({
         <div className="border-t border-line p-3">
           <input
             value={dirInput}
-            placeholder="directory name, e.g. bundle_cache — Enter to add"
+            placeholder={t("directory name, e.g. bundle_cache — Enter to add")}
             onChange={(e) => setDirInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && dirInput.trim()) {
-                const t = dirInput.trim();
+                const v = dirInput.trim();
                 setConfig((c) =>
-                  c && !c.excluded_dirs.includes(t) ? { ...c, excluded_dirs: [...c.excluded_dirs, t] } : c,
+                  c && !c.excluded_dirs.includes(v) ? { ...c, excluded_dirs: [...c.excluded_dirs, v] } : c,
                 );
                 setDirInput("");
               }
@@ -613,13 +640,13 @@ function ExclusionsSection({
         </div>
       </Card>
 
-      <Card title="Excluded extensions">
+      <Card title={t("Excluded extensions")}>
         <div className="flex flex-wrap gap-1.5 px-4 py-3">
           {config.excluded_extensions.map((x) => (
             <button
               key={x}
               type="button"
-              title={`Remove ${x}`}
+              title={t("Remove {name}", { name: x })}
               onClick={() =>
                 setConfig((c) =>
                   c ? { ...c, excluded_extensions: c.excluded_extensions.filter((e) => e !== x) } : c,
@@ -635,14 +662,14 @@ function ExclusionsSection({
         <div className="border-t border-line p-3">
           <input
             value={extInput}
-            placeholder="extension, e.g. .bin — Enter to add"
+            placeholder={t("extension, e.g. .bin — Enter to add")}
             onChange={(e) => setExtInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && extInput.trim()) {
-                const t = extInput.trim();
+                const v = extInput.trim();
                 setConfig((c) =>
-                  c && !c.excluded_extensions.includes(t)
-                    ? { ...c, excluded_extensions: [...c.excluded_extensions, t] }
+                  c && !c.excluded_extensions.includes(v)
+                    ? { ...c, excluded_extensions: [...c.excluded_extensions, v] }
                     : c,
                 );
                 setExtInput("");
@@ -654,10 +681,10 @@ function ExclusionsSection({
         </div>
       </Card>
 
-      <Card title="Hidden files">
+      <Card title={t("Hidden files")}>
         <Field
-          label="Skip hidden files"
-          description="Skip files and folders whose name starts with a dot. Turn off to index hidden files."
+          label={t("Skip hidden files")}
+          description={t("Skip files and folders whose name starts with a dot. Turn off to index hidden files.")}
         >
           <Switch
             checked={config.skip_hidden ?? true}
@@ -695,10 +722,10 @@ function SearchSection({
 }) {
   return (
     <>
-      <Card title="Results">
+      <Card title={t("Results")}>
         <Field
-          label="Show thumbnails"
-          description="Previews for images and PDFs (first page). PDFs need poppler, e.g. brew install poppler. Without it, PDFs show their file icon. Turn off to skip previews."
+          label={t("Show thumbnails")}
+          description={t("Previews for images and PDFs (first page). PDFs need poppler, e.g. brew install poppler. Without it, PDFs show their file icon. Turn off to skip previews.")}
         >
           <Switch
             checked={config.show_thumbnails ?? true}
@@ -706,10 +733,10 @@ function SearchSection({
           />
         </Field>
         <Field
-          label="Result layout"
-          description="Grid shows image cards. List shows one file per row, with size and age."
+          label={t("Result layout")}
+          description={t("Grid shows image cards. List shows one file per row, with size and age.")}
         >
-          <div role="radiogroup" aria-label="Result layout" className="pill-group">
+          <div role="radiogroup" aria-label={t("Result layout")} className="pill-group">
             {(["grid", "list"] as const).map((v) => {
               const active = (config.results_view ?? "grid") === v;
               return (
@@ -721,7 +748,7 @@ function SearchSection({
                   onClick={() => setConfig((c) => (c ? { ...c, results_view: v } : c))}
                   className="pill capitalize"
                 >
-                  {v}
+                  {t(v === "grid" ? "Grid" : "List")}
                 </button>
               );
             })}
@@ -729,10 +756,10 @@ function SearchSection({
         </Field>
       </Card>
 
-      <Card title="Ranking">
+      <Card title={t("Ranking")}>
         <Field
-          label="Semantic search"
-          description="Static embeddings, ~0.1 ms per query, fused with BM25 via RRF."
+          label={t("Semantic search")}
+          description={t("Static embeddings, ~0.1 ms per query, fused with BM25 via RRF.")}
         >
           <Switch
             checked={config.semantic_enabled ?? true}
@@ -742,10 +769,10 @@ function SearchSection({
         <OcrField config={config} setConfig={setConfig} />
       </Card>
 
-      <Card title="Background indexing">
+      <Card title={t("Background indexing")}>
         <Field
-          label="Crawl mode"
-          description="Balanced uses idle I/O and CPU priority. Eco also paces work on battery. Full speed keeps normal priority."
+          label={t("Crawl mode")}
+          description={t("Balanced uses idle I/O and CPU priority. Eco also paces work on battery. Full speed keeps normal priority.")}
         >
           <select
             value={config.crawl_mode ?? "full"}
@@ -764,14 +791,14 @@ function SearchSection({
             }
             className="field h-8"
           >
-            <option value="full">Full speed</option>
-            <option value="balanced">Balanced</option>
-            <option value="eco">Eco</option>
+            <option value="full">{t("Full speed")}</option>
+            <option value="balanced">{t("Balanced")}</option>
+            <option value="eco">{t("Eco")}</option>
           </select>
         </Field>
         <Field
-          label="Pause indexing"
-          description="Stops reading new files. Renames and deletes still update the index while paused."
+          label={t("Pause indexing")}
+          description={t("Stops reading new files. Renames and deletes still update the index while paused.")}
         >
           <Switch
             checked={config.pause_indexing ?? false}
@@ -782,11 +809,10 @@ function SearchSection({
         </Field>
       </Card>
 
-      <Card title="Aliases">
+      <Card title={t("Aliases")}>
         <div className="space-y-2 p-4">
           <p className="text-[12px] leading-[18px] text-muted">
-            Personal vocabulary: typing the term also matches any of its expansions
-            (case-insensitive, OR semantics).
+            {t("Personal vocabulary: typing the term also matches any of its expansions (case-insensitive, OR semantics).")}
           </p>
           {(config.aliases ?? []).map((alias, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -824,7 +850,7 @@ function SearchSection({
               />
               <button
                 type="button"
-                title="Remove alias"
+                title={t("Remove alias")}
                 onClick={() =>
                   setConfig((c) =>
                     c ? { ...c, aliases: (c.aliases ?? []).filter((_, j) => j !== i) } : c,
@@ -845,12 +871,12 @@ function SearchSection({
             }
             className="flex h-7 items-center gap-1 rounded-control border border-line px-2.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-fg"
           >
-            <Plus className="h-3 w-3" /> Add alias
+            <Plus className="h-3 w-3" /> {t("Add alias")}
           </button>
         </div>
       </Card>
 
-      <Card title="Query language">
+      <Card title={t("Query language")}>
         <div className="grid grid-cols-2 gap-x-8 px-4 py-2.5">
           {CHEATSHEET.map(([token, desc], idx) => (
             <div
@@ -860,7 +886,7 @@ function SearchSection({
               }`}
             >
               <code className="shrink-0 whitespace-nowrap text-fg">{token}</code>
-              <span className="truncate text-right text-[11px] text-subtle">{desc}</span>
+              <span className="truncate text-right text-[11px] text-subtle">{t(desc)}</span>
             </div>
           ))}
         </div>
@@ -878,7 +904,7 @@ function AiSection({ config, setConfig }: { config: KensakuConfig; setConfig: Re
   const [reembedState, setReembedState] = useState<"idle" | "pending">("idle");
 
   const modelId =
-    stats?.runtime?.model_id || config.semantic_model || "reported when the backend lands";
+    stats?.runtime?.model_id || config.semantic_model || t("reported when the backend lands");
   const queueDepth = stats?.ingestion?.embed_queue_depth ?? 0;
 
   const reembed = async () => {
@@ -893,31 +919,33 @@ function AiSection({ config, setConfig }: { config: KensakuConfig; setConfig: Re
 
   return (
     <>
-      <Card title="Embedding model">
-        <Field label="Model" description="Static embeddings — no GPU, no network.">
+      <MultilingualModelCard config={config} setConfig={setConfig} />
+
+      <Card title={t("Embedding model")}>
+        <Field label={t("Model")} description={t("Static embeddings — no GPU, no network.")}>
           <span className="max-w-48 truncate font-mono text-[11px] text-fg">{modelId}</span>
         </Field>
-        <Field label="Dimensions" description="Reported by the model manifest.">
+        <Field label={t("Dimensions")} description={t("Reported by the model manifest.")}>
           <span className="font-mono text-[11px] text-muted">{live ? "—" : "—"}</span>
         </Field>
-        <Field label="Vector tier on disk" description="Embedding vectors stored inside metadata.db.">
+        <Field label={t("Vector tier on disk")} description={t("Embedding vectors stored inside metadata.db.")}>
           <span className="font-mono text-[11px] text-muted">{formatBytes(stats?.index?.vector_bytes ?? 0)}</span>
         </Field>
-        <Field label="Readiness" description="Units searchable in RRF fusion right now.">
+        <Field label={t("Readiness")} description={t("Units searchable in RRF fusion right now.")}>
           <span
             className={`font-mono text-[11px] ${
               stats?.runtime?.semantic_ready ? "text-success" : "text-warning"
             }`}
           >
-            {stats?.runtime?.semantic_ready ? "ready" : live ? "warming up" : "pending backend"}
+            {stats?.runtime?.semantic_ready ? t("ready") : live ? t("warming up") : t("pending backend")}
           </span>
         </Field>
       </Card>
 
-      <Card title="Embedding table">
+      <Card title={t("Embedding table")}>
         <Field
-          label="Use f32 table"
-          description="Keep the static embedding table in f32 instead of the compact i8 table. For quality comparisons only."
+          label={t("Use f32 table")}
+          description={t("Keep the static embedding table in f32 instead of the compact i8 table. For quality comparisons only.")}
         >
           <Switch
             checked={config.semantic_f32_table ?? false}
@@ -926,10 +954,10 @@ function AiSection({ config, setConfig }: { config: KensakuConfig; setConfig: Re
         </Field>
       </Card>
 
-      <Card title="Embed queue">
+      <Card title={t("Embed queue")}>
         <div className="space-y-2 p-4">
           <div className="flex items-center justify-between text-[11px]">
-            <span className="text-muted">Queued units</span>
+            <span className="text-muted">{t("Queued units")}</span>
             <span className="font-mono text-fg">{formatComma(queueDepth)}</span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-accent-soft">
@@ -940,7 +968,7 @@ function AiSection({ config, setConfig }: { config: KensakuConfig; setConfig: Re
           </div>
           <div className="flex items-center justify-between pt-1">
             <span className="font-mono text-[11px] text-subtle">
-              {live ? "polled every 2 s" : "get_stats pending on the backend"}
+              {live ? t("polled every 2 s") : t("get_stats pending on the backend")}
             </span>
             <button
               type="button"
@@ -948,7 +976,7 @@ function AiSection({ config, setConfig }: { config: KensakuConfig; setConfig: Re
               className="flex h-7 items-center gap-1.5 rounded-control border border-line px-2.5 text-[11px] text-fg transition-colors hover:border-line-strong"
             >
               <RefreshCw className="h-3 w-3" />
-              {reembedState === "pending" ? "Queued…" : "Re-embed all"}
+              {reembedState === "pending" ? t("Queued…") : t("Re-embed all")}
             </button>
           </div>
         </div>
@@ -1002,7 +1030,7 @@ function CopyRow({
       </code>
       <button
         type="button"
-        title="Copy"
+        title={t("Copy")}
         onClick={() => {
           navigator.clipboard.writeText(text);
           onCopied();
@@ -1029,13 +1057,13 @@ function BetaSection({
   void config;
   void setConfig;
   return (
-    <Card title="Visual search">
+    <Card title={t("Visual search")}>
       <div className="flex items-center justify-between gap-4 px-4 py-3 opacity-50">
         <div className="min-w-0">
-          <p className="text-[12px] font-medium text-fg">Visual search</p>
-          <p className="text-[12px] leading-[18px] text-muted">Find images by what they show. Coming later.</p>
+          <p className="text-[12px] font-medium text-fg">{t("Visual search")}</p>
+          <p className="text-[12px] leading-[18px] text-muted">{t("Find images by what they show. Coming later.")}</p>
         </div>
-        <span className="shrink-0 rounded-small border border-line px-2 py-0.5 text-[12px] text-muted">Coming later</span>
+        <span className="shrink-0 rounded-small border border-line px-2 py-0.5 text-[12px] text-muted">{t("Coming later")}</span>
       </div>
     </Card>
   );
@@ -1073,18 +1101,18 @@ function AgentConnectCard() {
   };
 
   const statusLabel = (status: ClientStatus): string => {
-    if (status.configured) return "Connected";
-    if (status.installed) return "Found";
-    if (status.config_path) return "Not set up";
-    return "Not detected";
+    if (status.configured) return t("Connected");
+    if (status.installed) return t("Found");
+    if (status.config_path) return t("Not set up");
+    return t("Not detected");
   };
 
   return (
-    <Card title="One-click connect">
+    <Card title={t("One-click connect")}>
       <div>
         {statuses.length === 0 && (
           <p className="px-4 py-3 text-[12px] text-muted">
-            Detecting installed MCP clients…
+            {t("Detecting installed MCP clients…")}
           </p>
         )}
         {statuses.map((status) => (
@@ -1095,7 +1123,7 @@ function AgentConnectCard() {
             <div className="min-w-0">
               <p className="text-[12px] font-medium text-fg">{status.name}</p>
               <p className="truncate font-mono text-[11px] text-subtle">
-                {status.config_path ?? "config location not found"}
+                {status.config_path ?? t("config location not found")}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -1115,7 +1143,7 @@ function AgentConnectCard() {
                   onClick={() => void install(status.id)}
                   className="flex h-6 items-center rounded-control border border-line px-2 text-[11px] text-fg transition-colors hover:border-line-strong disabled:opacity-50"
                 >
-                  {busy === status.id ? "Adding…" : "Add Kensaku"}
+                  {busy === status.id ? t("Adding…") : t("Add Kensaku")}
                 </button>
               )}
             </div>
@@ -1126,8 +1154,7 @@ function AgentConnectCard() {
         <p className="border-t border-line px-4 py-2 text-[12px] text-muted">{notice}</p>
       )}
       <p className="border-t border-line px-4 py-2.5 text-[12px] leading-[18px] text-muted">
-        Adding Kensaku merges one entry into the client's config file (a backup is left next to
-        it). Restart the client afterwards. Manual JSON stays available above.
+        {t("Adding Kensaku merges one entry into the client's config file (a backup is left next to it). Restart the client afterwards. Manual JSON stays available above.")}
       </p>
     </Card>
   );
@@ -1151,19 +1178,18 @@ function AgentsSection({
   return (
     <>
       <p className="pb-3 text-[12px] leading-[18px] text-muted">
-        Let agents search this index. Read-only by default, local, no network.
+        {t("Let agents search this index. Read-only by default, local, no network.")}
       </p>
 
       <AgentConnectCard />
 
       {/* MCP */}
-      <Card title="Model Context Protocol">
+      <Card title={t("Model Context Protocol")}>
         <div className="px-4 py-3">
           <p className="text-[12px] leading-[18px] text-muted">
-            Point Claude Code, Cursor, or any MCP client at the{" "}
-            <code className="font-mono text-[11px] text-fg">kensaku-cli</code> binary. It reuses
-            this app's data directory: it attaches to the daemon when one is running, otherwise it
-            reads the index read-only.
+            {t("Point Claude Code, Cursor, or any MCP client at the")}{" "}
+            <code className="font-mono text-[11px] text-fg">kensaku-cli</code>{" "}
+            {t("binary. It reuses this app's data directory: it attaches to the daemon when one is running, otherwise it reads the index read-only.")}
           </p>
         </div>
         <div className="relative border-t border-line bg-accent-soft p-3 pr-10">
@@ -1172,7 +1198,7 @@ function AgentsSection({
           </pre>
           <button
             type="button"
-            title="Copy config JSON"
+            title={t("Copy config JSON")}
             onClick={() => {
               navigator.clipboard.writeText(MCP_CONFIG);
               setConfigCopied(true);
@@ -1184,15 +1210,15 @@ function AgentsSection({
           </button>
         </div>
         <p className="border-t border-line px-4 py-2.5 text-[12px] leading-[18px] text-muted">
-          If <code className="font-mono text-[11px] text-fg">kensaku-cli</code> isn't on your
-          PATH, use the absolute path to the binary —{" "}
-          <code className="font-mono text-[11px] text-fg">~/.cargo/bin/kensaku-cli</code> or{" "}
+          {t("If")} <code className="font-mono text-[11px] text-fg">kensaku-cli</code>{" "}
+          {t("isn't on your PATH, use the absolute path to the binary —")}{" "}
+          <code className="font-mono text-[11px] text-fg">~/.cargo/bin/kensaku-cli</code> {t("or")}{" "}
           <code className="font-mono text-[11px] text-fg">target/release/kensaku-cli</code>.
         </p>
       </Card>
 
       {/* CLI */}
-      <Card title="Command line">
+      <Card title={t("Command line")}>
         <div>
           {CLI_EXAMPLES.map((cmd) => (
             <CopyRow
@@ -1204,13 +1230,12 @@ function AgentsSection({
           ))}
         </div>
         <p className="border-t border-line px-4 py-2.5 text-[12px] leading-[18px] text-muted">
-          When the daemon is running the MCP server forwards queries to it and never opens the
-          database itself. Without a daemon it falls back to the read-only local index.
+          {t("When the daemon is running the MCP server forwards queries to it and never opens the database itself. Without a daemon it falls back to the read-only local index.")}
         </p>
       </Card>
 
       {/* Tools */}
-      <Card title="MCP tools">
+      <Card title={t("MCP tools")}>
         <div className="px-4 py-1.5">
           {MCP_TOOLS.map(([name, args]) => (
             <div
@@ -1229,10 +1254,10 @@ function AgentsSection({
       </Card>
 
       {/* Write access */}
-      <Card title="Write access">
+      <Card title={t("Write access")}>
         <Field
-          label="Allow MCP reindex"
-          description="Adds an opt-in reindex tool for agents. Requires the daemon; restart MCP clients after changing this."
+          label={t("Allow MCP reindex")}
+          description={t("Adds an opt-in reindex tool for agents. Requires the daemon; restart MCP clients after changing this.")}
         >
           <Switch
             checked={config.mcp_allow_reindex ?? false}
@@ -1244,11 +1269,10 @@ function AgentsSection({
       </Card>
 
       {/* Security */}
-      <Card title="Security">
+      <Card title={t("Security")}>
         <p className="p-4 text-[12px] leading-[18px] text-muted">
-          Read-only by default. <code className="font-mono text-[11px] text-fg">reindex</code> is
-          off unless enabled above. No shell and no network. Honors your watched folders,
-          exclusions and the daemon's opt-in check.
+          {t("Read-only by default.")} <code className="font-mono text-[11px] text-fg">reindex</code>{" "}
+          {t("is off unless enabled above. No shell and no network. Honors your watched folders, exclusions and the daemon's opt-in check.")}
         </p>
       </Card>
     </>
@@ -1275,7 +1299,7 @@ function useResetPending(): boolean {
 /** Tracks keys the app persists in localStorage, so a reset starts clean. */
 function clearClientState() {
   try {
-    for (const key of ["kensaku.theme", "kensaku.view", "kensaku.preview"]) {
+    for (const key of ["kensaku.theme", "kensaku.view", "kensaku.preview", "kensaku.language"]) {
       localStorage.removeItem(key);
     }
   } catch {
@@ -1359,14 +1383,14 @@ function ResetDialog({ onClose }: { onClose: () => void }) {
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Reset Kensaku"
+        aria-label={t("Reset Kensaku")}
         className="overlay-in elevated w-full max-w-[400px] overflow-hidden border-danger/30"
       >
         <div className="flex items-center justify-between border-b border-line bg-accent-soft px-4 py-2.5">
-          <p className="text-[11px] font-medium text-danger">Danger zone</p>
+          <p className="text-[11px] font-medium text-danger">{t("Danger zone")}</p>
           <button
             type="button"
-            title="Cancel (Esc)"
+            title={t("Cancel (Esc)")}
             onClick={onClose}
             className="flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-elevated hover:text-fg"
           >
@@ -1381,15 +1405,15 @@ function ResetDialog({ onClose }: { onClose: () => void }) {
           }}
         >
           <div className="p-4">
-            <p className="text-[13px] font-semibold text-fg">Reset Kensaku</p>
+            <p className="text-[13px] font-semibold text-fg">{t("Reset Kensaku")}</p>
             <p className="pt-0.5 text-[12px] leading-[18px] text-muted">
-              This will delete your index and settings and restart Kensaku.
+              {t("This will delete your index and settings and restart Kensaku.")}
             </p>
           </div>
 
           <div className="px-4 pb-4">
             <label htmlFor="reset-confirm" className="eyebrow pb-1.5 block">
-              Type <span className="font-mono normal-case text-danger">RESET</span> to confirm
+              {t("Type")} <span className="font-mono normal-case text-danger">RESET</span> {t("to confirm")}
             </label>
             <input
               id="reset-confirm"
@@ -1413,14 +1437,14 @@ function ResetDialog({ onClose }: { onClose: () => void }) {
               onClick={onClose}
               className="flex h-8 items-center rounded-control border border-line px-3 text-[12px] text-fg transition-colors hover:border-line-strong"
             >
-              Cancel
+              {t("Cancel")}
             </button>
             <button
               type="submit"
               disabled={!matches || running}
               className="flex h-8 items-center rounded-control bg-danger px-3 text-[12px] font-medium text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {running ? "Resetting…" : "Reset and restart"}
+              {running ? t("Resetting…") : t("Reset and restart")}
             </button>
           </div>
         </form>
@@ -1442,7 +1466,7 @@ function AboutSection() {
         if (!cancelled) setVersion(v);
       })
       .catch(() => {
-        if (!cancelled) setVersion("unknown");
+        if (!cancelled) setVersion(t("unknown"));
       });
     return () => {
       cancelled = true;
@@ -1465,12 +1489,12 @@ function AboutSection() {
       {resetPending && (
         <div className="flex items-center gap-2 rounded-control border border-warning/40 bg-elevated px-4 py-2.5">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
-          <p className="text-[12px] text-muted">A reset is pending and will finish on next launch.</p>
+          <p className="text-[12px] text-muted">{t("A reset is pending and will finish on next launch.")}</p>
         </div>
       )}
       {resetPending && <div className="h-3" />}
 
-      <Card title="Version">
+      <Card title={t("Version")}>
         <div className="flex items-center justify-between p-4">
           <div>
             <p className="text-[15px] font-semibold text-fg">
@@ -1478,7 +1502,7 @@ function AboutSection() {
             </p>
             <p className="font-mono text-[11px] text-subtle">{version}</p>
             <p className="mt-1 text-[11px] text-subtle">
-              Auto-update isn't wired up yet — updates are manual.
+              {t("Auto-update isn't wired up yet — updates are manual.")}
             </p>
           </div>
           <div className="flex items-center gap-1.5">
@@ -1499,47 +1523,46 @@ function AboutSection() {
             disabled={checking}
             className="btn btn-secondary h-8 !rounded-control"
           >
-            {checking ? "Opening…" : "Check for updates"}
+            {checking ? t("Opening…") : t("Check for updates")}
           </button>
           <span className="ml-3 text-[11px] text-subtle">
-            Opens the latest release page in your browser.
+            {t("Opens the latest release page in your browser.")}
           </span>
         </div>
       </Card>
 
-      <Card title="How to use Kensaku">
+      <Card title={t("How to use Kensaku")}>
         <div className="space-y-2 p-4 text-[12px] leading-[18px] text-muted">
-          <p className="text-fg">A few simple tricks make search feel instant:</p>
+          <p className="text-fg">{t("A few simple tricks make search feel instant:")}</p>
           <ul className="list-disc space-y-1 pl-5">
-            <li><b>Tab</b> shows or hides the details pane next to results.</li>
-            <li><b>Aliases</b> let a word like “resume” also find “cv” and “curriculum”.</li>
-            <li><b>Filters</b> such as <code className="font-mono text-[11px] text-fg">type:pdf</code>, <code className="font-mono text-[11px] text-fg">ext:png</code>, <code className="font-mono text-[11px] text-fg">in:~/Projects</code>, <code className="font-mono text-[11px] text-fg">modified:&lt;7d</code> narrow results.</li>
-            <li><b>/</b> opens the command menu for quick actions like <code className="font-mono text-[11px] text-fg">/dupes</code>, <code className="font-mono text-[11px] text-fg">/doctor</code>, <code className="font-mono text-[11px] text-fg">/settings</code>.</li>
-            <li><b>@</b> mentions a folder to search inside it.</li>
-            <li><b>Sort</b> and <b>saved searches</b> keep your best queries one click away.</li>
-            <li><b>Pin</b> important files so they stay on the home screen.</li>
-            <li><b>OCR</b> reads text inside images and screenshots.</li>
+            <li><b>Tab</b> {t("shows or hides the details pane next to results.")}</li>
+            <li><b>{t("Aliases")}</b> {t("let a word like “resume” also find “cv” and “curriculum”.")}</li>
+            <li><b>{t("Filters")}</b> {t("such as")} <code className="font-mono text-[11px] text-fg">type:pdf</code>, <code className="font-mono text-[11px] text-fg">ext:png</code>, <code className="font-mono text-[11px] text-fg">in:~/Projects</code>, <code className="font-mono text-[11px] text-fg">modified:&lt;7d</code> {t("narrow results.")}</li>
+            <li><b>/</b> {t("opens the command menu for quick actions like")} <code className="font-mono text-[11px] text-fg">/dupes</code>, <code className="font-mono text-[11px] text-fg">/doctor</code>, <code className="font-mono text-[11px] text-fg">/settings</code>.</li>
+            <li><b>@</b> {t("mentions a folder to search inside it.")}</li>
+            <li><b>{t("Sort")}</b> {t("and")} <b>{t("saved searches")}</b> {t("keep your best queries one click away.")}</li>
+            <li><b>{t("Pin")}</b> {t("important files so they stay on the home screen.")}</li>
+            <li><b>OCR</b> {t("reads text inside images and screenshots.")}</li>
+            <li>{t("Plain Russian works:")} <code className="font-mono text-[11px] text-fg">скриншоты за прошлую неделю</code>, <code className="font-mono text-[11px] text-fg">большие видео в загрузках</code>.</li>
           </ul>
-          <p>Everything stays on your computer. Nothing is sent anywhere.</p>
+          <p>{t("Everything stays on your computer. Nothing is sent anywhere.")}</p>
         </div>
       </Card>
 
-      <Card title="Design thesis">
+      <Card title={t("Design thesis")}>
         <div className="p-4 text-center">
           <p className="font-serif text-[15px] italic leading-[18px] text-muted">
-            “A warm, local, read-only index of your machine that answers in under 15 ms —
-            for you, and for every agent you use.”
+            {t("“A warm, local, read-only index of your machine that answers in under 15 ms — for you, and for every agent you use.”")}
           </p>
         </div>
       </Card>
 
-      <Card title="Setup">
+      <Card title={t("Setup")}>
         <div className="flex items-center justify-between gap-4 p-4">
           <div className="min-w-0">
-            <p className="text-[13px] font-medium text-fg">Run setup again</p>
+            <p className="text-[13px] font-medium text-fg">{t("Run setup again")}</p>
             <p className="line-clamp-2 pt-0.5 text-[12px] leading-[18px] text-muted">
-              Re-run the guided first-run flow (folders, preferences, optional packs, first scan).
-              Your index and config are preserved; setup markers reset.
+              {t("Re-run the guided first-run flow (folders, preferences, optional packs, first scan). Your index and config are preserved; setup markers reset.")}
             </p>
           </div>
           <button
@@ -1554,7 +1577,7 @@ function AboutSection() {
             }}
             className="h-8 shrink-0 rounded-control border border-line px-3 text-[11px] font-medium text-fg transition-colors hover:border-line-strong"
           >
-            Run setup again…
+            {t("Run setup again…")}
           </button>
         </div>
       </Card>
@@ -1562,15 +1585,14 @@ function AboutSection() {
       {/* Danger zone — visually distinct but calm: danger hairline, no fills. */}
       <div>
         <p className="pb-2 text-[11px] font-medium text-danger">
-          Danger zone
+          {t("Danger zone")}
         </p>
         <div className="overflow-hidden rounded-panel border border-danger/30 bg-elevated">
           <div className="flex items-center justify-between gap-4 p-4">
             <div className="min-w-0">
-              <p className="text-[13px] font-medium text-fg">Reset Kensaku</p>
+              <p className="text-[13px] font-medium text-fg">{t("Reset Kensaku")}</p>
               <p className="line-clamp-2 pt-0.5 text-[12px] leading-[18px] text-muted">
-                Deletes the index, metadata database, downloaded models, and settings. This cannot
-                be undone.
+                {t("Deletes the index, metadata database, downloaded models, and settings. This cannot be undone.")}
               </p>
             </div>
             <button
@@ -1578,7 +1600,7 @@ function AboutSection() {
               onClick={() => setConfirmOpen(true)}
               className="h-8 shrink-0 rounded-control border border-danger/40 px-3 text-[11px] font-medium text-danger transition-colors hover:bg-danger/10"
             >
-              Reset everything…
+              {t("Reset everything…")}
             </button>
           </div>
         </div>
@@ -1592,7 +1614,7 @@ function AboutSection() {
 /* A tiny rendering of the app in each finish: field, rule, three tiles.
    Colors are the real tokens, scoped by data-theme on the swatch. */
 function ThemeSwatch({ value, active, onSelect }: { value: "light" | "dark"; active: boolean; onSelect: () => void }) {
-  const label = { light: "Light", dark: "Dark" }[value];
+  const label = { light: t("Light"), dark: t("Dark") }[value];
   return (
     <button type="button" onClick={onSelect} aria-pressed={active} className="group flex flex-col gap-2.5 text-left outline-none">
       <span

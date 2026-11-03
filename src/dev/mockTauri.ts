@@ -7,6 +7,7 @@
   *   #setup=1     start on onboarding
   *   #q=invoice   open with a query
   *   #empty=1     home with no recent files
+  *   #lang=ru     Russian interface (en, ru or system)
  */
 import { classify } from "../lib/categories";
 
@@ -67,6 +68,7 @@ const config: Record<string, unknown> = {
   semantic_enabled: true, ocr_enabled: true, ocr_engine: "tesseract", theme: "dark",
   saved_searches: [{ name: "Invoices", query: "invoice type:pdf" }, { name: "This week's screenshots", query: "screenshot modified:7d" }],
   pins: [], show_thumbnails: true, results_view: "grid", crawl_mode: "balanced",
+  language: params.get("lang") ?? "system",
 };
 
 function search(query: string) {
@@ -115,6 +117,10 @@ const handlers: Record<string, (a: any) => unknown> = {
   get_ocr_pack_status: () => ({ ready: false, downloading: false, dir: "~/.config/kensaku/ocr", artifacts: [] }),
   get_indra_pack_status: () => ({ ready: false, downloading: false, dir: "~/.config/kensaku/ocr-indra", artifacts: [] }),
   get_models_status: () => ({ ready: true }),
+  get_multilingual_status: () => ({
+    ready: false, downloading: false, progress: null, error: null, dir: "~/.config/kensaku/models/multilingual",
+    artifacts: [], total_bytes: 531_100_271, total_present_bytes: 0,
+  }),
   get_autostart: () => true,
   get_file_details: (a) => {
     const r = FILES.find((x) => x.path === a.path);

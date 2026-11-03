@@ -2,6 +2,7 @@ import React from "react";
 import { CATEGORY_CHIPS, categoryCounts } from "../lib/categories";
 import { Facets, SearchResult } from "../types";
 import { formatComma } from "../lib/format";
+import { t, useLanguage } from "../i18n";
 
 /* Category segments in one floating capsule. Click toggles include;
    Alt-click toggles exclude. OR within the row, AND with the query.
@@ -16,6 +17,7 @@ interface CategoryChipsProps {
 }
 
 export const CategoryChips: React.FC<CategoryChipsProps> = ({ results, facets, selected, excluded, onToggle }) => {
+  useLanguage();
   const counts = facets ? { all: facets.all, recent: facets.recent, ...facets.types } : categoryCounts(results);
   const empty = selected.size === 0 && excluded.size === 0;
   const hasAny = results.length > 0;
@@ -32,11 +34,11 @@ export const CategoryChips: React.FC<CategoryChipsProps> = ({ results, facets, s
               key={chip.id}
               type="button"
               onClick={(e) => onToggle(chip.id, e.altKey)}
-              title={isExcluded ? "Excluded. Click to clear" : "Click to include, Alt-click to exclude"}
+              title={isExcluded ? t("Excluded. Click to clear") : t("Click to include, Alt-click to exclude")}
               data-active={isSelected && !isExcluded}
               className={`seg !px-3 ${isExcluded ? "text-danger line-through" : ""} ${dim ? "opacity-40" : ""}`}
             >
-              <span>{chip.label}</span>
+              <span>{t(chip.label)}</span>
               {hasAny && count != null && count > 0 && (
                 <span className="t-meta text-[10px] text-subtle">{formatComma(count)}</span>
               )}

@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import { t, useLanguage } from "../i18n";
 
 export interface SlashCommand {
   id: string;
@@ -21,6 +22,7 @@ export function SlashMenu({
   activeIndex: number;
   onPick: (item: SlashCommand) => void;
 }) {
+  useLanguage();
   if (items.length === 0) return null;
   return (
     <div className="elevated menu-pop relative z-20 mx-8 mb-2 mt-3 shrink-0 overflow-hidden p-1.5">
@@ -44,9 +46,9 @@ export function SlashMenu({
               <span className="block truncate text-[13px] font-medium text-fg">
                 /{item.name}
               </span>
-              <span className="block truncate text-[12px] text-muted">{item.description}</span>
+              <span className="block truncate text-[12px] text-muted">{t(item.description)}</span>
             </span>
-            <span className="shrink-0 t-meta text-subtle">{item.label}</span>
+            <span className="shrink-0 t-meta text-subtle">{t(item.label)}</span>
           </button>
         );
       })}

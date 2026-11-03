@@ -21,7 +21,8 @@ pub const NONE: &str = "none";
 /// existing indexes pick up the fix without a manual rebuild.
 ///
 /// - 2: PP-OCR keeps spaces between words; scanned PDFs are decoded properly.
-pub const OCR_REVISION: u32 = 2;
+/// - 3: Cyrillic: Tesseract reads `rus+eng`, Cyrillic systems default to Indra.
+pub const OCR_REVISION: u32 = 3;
 
 /// Result of one OCR attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]

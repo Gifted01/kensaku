@@ -281,6 +281,7 @@ impl IndexerManager {
         // Apply the opt-in external extractor registry before any crawl starts.
         crate::indexer::extract::set_external_extractors(config.extractors.clone());
         crate::indexer::extract::image::set_ocr_max_image_bytes(config.ocr_max_image_bytes);
+        crate::indexer::extract::image::set_cyrillic_ocr(crate::locale::wants_cyrillic(&config.language));
         crate::indexer::extract::set_content_caps(config.content_max_file_size_mb, config.content_max_text_bytes);
         crate::embed::set_max_semantic_units(config.content_max_semantic_units);
         let index_dir = KensakuConfig::index_dir();
@@ -403,6 +404,7 @@ impl IndexerManager {
     pub fn new_readonly(config: KensakuConfig) -> Self {
         crate::indexer::extract::set_external_extractors(config.extractors.clone());
         crate::indexer::extract::image::set_ocr_max_image_bytes(config.ocr_max_image_bytes);
+        crate::indexer::extract::image::set_cyrillic_ocr(crate::locale::wants_cyrillic(&config.language));
         crate::indexer::extract::set_content_caps(config.content_max_file_size_mb, config.content_max_text_bytes);
         crate::embed::set_max_semantic_units(config.content_max_semantic_units);
         let index_dir = KensakuConfig::index_dir();
@@ -1531,20 +1533,8 @@ impl IndexerManager {
             Some(db) => db.units_model_id()?,
             None => None,
         };
-        let model_dir = KensakuConfig::config_dir().join("models");
-        let real_model = model_dir.join("model.safetensors").is_file()
-            && model_dir.join("tokenizer.json").is_file();
-        let (active_model_id, model_name) = if real_model {
-            (
-                crate::embed::model::REAL_MODEL_ID,
-                "potion-base-8M".to_string(),
-            )
-        } else {
-            (
-                crate::embed::model::DEFAULT_MODEL_ID,
-                "static-embed-256".to_string(),
-            )
-        };
+        let registry = crate::embed::model::ModelRegistry::global();
+        let (active_model_id, model_name) = (registry.model_id, registry.name.clone());
         let index_dir = KensakuConfig::index_dir();
         let index_bytes = dir_size_bytes(&index_dir).saturating_add(prefixed_file_bytes(
             &KensakuConfig::config_dir(),
@@ -1566,7 +1556,7 @@ impl IndexerManager {
             "model_id": units_model_id,
             "active_model_id": active_model_id,
             "model_name": model_name,
-            "model_real": real_model,
+            "model_real": registry.table_loaded(),
             "roots": roots,
             "last_reconcile": last_reconcile,
             "is_indexing": status.is_indexing,
@@ -1690,6 +1680,7 @@ impl IndexerManager {
         *self.config.write() = config.clone();
         crate::util::priority::apply(config.crawl_mode);
         crate::indexer::extract::image::set_ocr_max_image_bytes(config.ocr_max_image_bytes);
+        crate::indexer::extract::image::set_cyrillic_ocr(crate::locale::wants_cyrillic(&config.language));
         crate::indexer::extract::set_content_caps(config.content_max_file_size_mb, config.content_max_text_bytes);
         crate::embed::set_max_semantic_units(config.content_max_semantic_units);
 

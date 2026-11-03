@@ -364,7 +364,8 @@ pub const MAX_REGEX_PATTERN_LEN: usize = 1024;
 /// v1: K5 schema (content_folded + content_raw)
 /// v2: K15 schema (CJK-aware "kensaku" tokenizer on filename and content)
 /// v3: ext/size fields for filter pushdown (K12/B4)
-pub const CONTENT_SCHEMA_VERSION: u32 = 3;
+/// v4: Russian morphology (Snowball stems for Cyrillic tokens)
+pub const CONTENT_SCHEMA_VERSION: u32 = 4;
 pub const SCHEMA_MARKER_FILE: &str = "content.schema";
 
 impl ContentIndex {
@@ -421,6 +422,8 @@ impl ContentIndex {
                     "K15 CJK tokenizer migration (schema v1 -> v2)"
                 } else if !has_pushdown {
                     "K12 filter pushdown migration (schema v2 -> v3)"
+                } else if marker_version < 4 {
+                    "Russian morphology migration (schema v3 -> v4)"
                 } else {
                     "Content schema marker is stale"
                 };
@@ -1146,7 +1149,18 @@ impl ContentIndex {
         let mut first_match_idx = None;
 
         for term in &terms {
-            if let Some(pos) = content_lower.find(term) {
+            // The index matches Russian word forms by stem ("договоры" finds
+            // "договора"), so fall back to the stem when the exact form is not
+            // in the text; the stem is a prefix of the inflected word.
+            let found = content_lower.find(term).or_else(|| {
+                let stem = crate::indexer::tokenizer::normalize_word(term);
+                if stem.chars().count() >= 3 && stem != *term {
+                    content_lower.find(&stem)
+                } else {
+                    None
+                }
+            });
+            if let Some(pos) = found {
                 first_match_idx = match first_match_idx {
                     Some(cur) => Some(std::cmp::min(cur, pos)),
                     None => Some(pos),
@@ -2008,6 +2022,45 @@ mod tests {
     }
 
     #[test]
+    fn russian_word_forms_match_by_stem() {
+        let temp = temp_index("ru-morphology");
+        let index = temp.index.as_ref().unwrap();
+        add(
+            index,
+            "/tmp/kensaku/ru/contract.docx",
+            "Договор поставки Касперский.docx",
+            "Стороны заключили договор о поставке лицензий Kaspersky Endpoint Security. \
+             Счёт на оплату приложен к договору.",
+        );
+        add(
+            index,
+            "/tmp/kensaku/ru/notes.txt",
+            "заметки.txt",
+            "Встреча по внедрению DLP-системы перенесена на четверг.",
+        );
+        index.commit().unwrap();
+
+        // Different case endings than the indexed text.
+        // (Snowball does not restore fleeting vowels: "поставок" ≠ "поставк".)
+        for query in ["договоры", "договорами", "лицензия", "поставка", "Счет"]
+        {
+            let hits = index.search(query, 10, None);
+            assert_eq!(hits.len(), 1, "query {query:?}");
+            assert_eq!(hits[0].filename, "Договор поставки Касперский.docx");
+        }
+        let hits = index.search("внедрение", 10, None);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].filename, "заметки.txt");
+        // English is untouched by the Russian stemmer.
+        assert_eq!(index.search("kaspersky endpoint", 10, None).len(), 1);
+
+        // The snippet lands on the inflected word.
+        let text = "Стороны заключили договор о поставке лицензий.";
+        let snippet = ContentIndex::extract_snippet_from_text(text, "лицензия").unwrap();
+        assert!(snippet.contains("лицензий"), "{snippet}");
+    }
+
+    #[test]
     fn cjk_search_exact_and_substring() {
         let temp = temp_index("cjk-search");
         let index = temp.index.as_ref().unwrap();
@@ -2126,7 +2179,7 @@ mod tests {
             Some("K12 filter pushdown migration (schema v2 -> v3)")
         );
         let marker = fs::read_to_string(index_dir.join(SCHEMA_MARKER_FILE)).unwrap();
-        assert_eq!(marker.trim(), "3");
+        assert_eq!(marker.trim(), CONTENT_SCHEMA_VERSION.to_string());
         assert!(migrated.ext_field.is_some());
         assert!(migrated.size_field.is_some());
         drop(migrated);
@@ -2176,7 +2229,7 @@ mod tests {
         );
         assert!(index_dir.join(SCHEMA_MARKER_FILE).exists());
         let marker = fs::read_to_string(index_dir.join(SCHEMA_MARKER_FILE)).unwrap();
-        assert_eq!(marker.trim(), "3");
+        assert_eq!(marker.trim(), CONTENT_SCHEMA_VERSION.to_string());
         drop(migrated);
         std::thread::sleep(std::time::Duration::from_millis(20));
 

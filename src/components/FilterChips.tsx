@@ -2,6 +2,7 @@ import React from "react";
 import { ActiveFilter } from "../types";
 import { X, Folder } from "lucide-react";
 import { hintToken } from "../lib/hints";
+import { t, useLanguage } from "../i18n";
 
 /* Visible chips for every active backend filter — click to remove. Plus
    suggestion hints from the backend (click to apply to the query). */
@@ -19,6 +20,7 @@ export const FilterChips: React.FC<FilterChipsProps> = ({
   onRemoveFilter,
   onApplyHint,
 }) => {
+  useLanguage();
   if (filters.length === 0 && hints.length === 0) return null;
 
   return (
@@ -27,7 +29,7 @@ export const FilterChips: React.FC<FilterChipsProps> = ({
         <button
           key={f.raw + i}
           type="button"
-          title={`Remove filter ${f.raw}`}
+          title={t("Remove filter {name}", { name: f.raw })}
           onClick={(e) => {
             e.stopPropagation();
             onRemoveFilter(f);

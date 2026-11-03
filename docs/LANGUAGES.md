@@ -12,11 +12,13 @@ Kensaku treats human languages and scripts through dedicated tokenization pipeli
 flowchart TD
     Input["Input Document / Query"] --> Check{"Script Classification"}
     Check -->|CJK Ideographs & Syllables| CJK["KensakuTokenizer (Unigram + Bigram)"]
-    Check -->|Latin, Cyrillic, Greek, Numbers| Simple["Alphanumeric Tokenizer + LowerCaser"]
+    Check -->|Latin, Greek, Numbers| Simple["Alphanumeric Tokenizer + LowerCaser"]
+    Check -->|Cyrillic words| Ru["Alphanumeric Tokenizer + LowerCaser + Russian Snowball stemmer"]
     Check -->|Images / Scanned PDFs| OCR["OCR Engine Router (Indra / PP-OCR)"]
     
     CJK --> Index["Tantivy Full-Text Index"]
     Simple --> Index
+    Ru --> Index
     OCR --> Index
 ```
 
@@ -97,7 +99,7 @@ For images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`, `.gif`) and scann
 | **Model Size** | ~27 MB (8 ONNX models) | ~6 MB (compact tiny model) | Depends on system packages |
 | **Download Mode** | On-demand upon selection | On-demand upon selection | Installed by user via package manager |
 | **Script Routing** | Automatic via `script.onnx` classifier | Single joint multilingual model | Requires `-l` language pack flags |
-| **Supported Scripts** | • Latin & Cyrillic (`rec.onnx`)<br>• CJK (`rec_cjk.onnx`)<br>• RTL / Arabic / Hebrew (`rec_rtl.onnx`)<br>• Indic & World (`rec_world.onnx`) | Latin, Chinese, Japanese, Korean, Cyrillic | Broad language coverage via `tessdata` |
+| **Supported Scripts** | • Latin & Cyrillic (`rec.onnx`)<br>• CJK (`rec_cjk.onnx`)<br>• RTL / Arabic / Hebrew (`rec_rtl.onnx`)<br>• Indic & World (`rec_world.onnx`) | Latin, Chinese, Japanese, Korean — **no Cyrillic** (the tiny dictionary has no Cyrillic letters) | Broad language coverage via `tessdata`; Kensaku runs `rus+eng` on Cyrillic systems |
 | **Orientation & Deskew** | Automatic (`orient.onnx`) | Fixed angle detection | Leptonica deskew |
 
 ### OCR Configuration Options
@@ -115,6 +117,16 @@ In `config.json` (see [`docs/CONFIG.md`](CONFIG.md)):
 * `ocr_enabled` (`bool`): Toggle OCR on or off. Defaults to `true`.
 * `ocr_engine` (`string`): Choose `"indra"`, `"accurate"` (PP-OCR), `"tesseract"`, or `"none"`.
 * `ocr_max_image_bytes` (`int`): Maximum image file size to run OCR on (in bytes). `0` uses the default safe threshold (20 MB).
+
+---
+
+## 3a. Russian and other Cyrillic text
+
+* **Morphology.** Tokens made only of Cyrillic letters are folded (`ё` → `е`) and reduced to their Snowball stem at index and query time, so `договор`, `договора` and `договорами` are one term. Latin, numbers, code and CJK tokens are untouched. Snowball does not restore fleeting vowels (`поставок` ≠ `поставка`). The index rebuilds once when upgrading (content schema v4).
+* **Natural-language queries.** Dates (`вчера`, `за прошлую неделю`, `3 дня назад`, `в прошлую пятницу`), types (`скриншоты`, `презентации`, `таблицы`, `видео`), sizes (`больше 5 мб`, `большие`), sort (`последний`, `самые большие`) and standard folders (`в загрузках`, `на рабочем столе`) become the same removable chips as their English equivalents.
+* **OCR.** On a Cyrillic-script system (or with the Russian interface) the default engine is Indra OCR, Tesseract additionally downloads `rus.traineddata` and runs with `-l rus+eng`. PP-OCRv6 cannot read Cyrillic. On Windows, paths that Tesseract's ANSI command line cannot represent are passed as 8.3 short names or through stdin.
+* **Meaning search.** The default `potion-base-8M` table is English-only. The optional `potion-multilingual-128M` table (`"semantic_model": "multilingual"`, Settings → Meaning search) covers 101 languages including Russian; its XLM-R SentencePiece tokenizer is handled by a small built-in HuggingFace-compatible tokenizer, checked against the reference `tokenizers` library.
+* **Interface.** English and Russian (`"language": "system" | "en" | "ru"`). See `src/i18n/` and `node tools/check-i18n.mjs`.
 
 ---
 

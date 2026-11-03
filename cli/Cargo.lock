@@ -3554,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "kensaku"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "auto-launch",
  "base64 0.22.1",
@@ -3576,6 +3576,7 @@ dependencies = [
  "rayon",
  "regex",
  "rusqlite",
+ "rust-stemmers",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3590,6 +3591,7 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "unicode-normalization",
  "ureq 2.12.1",
  "windows",
  "zip",

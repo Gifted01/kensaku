@@ -1,4 +1,5 @@
 import React from "react";
+import { t } from "../../i18n";
 
 /* Shared primitives for the Settings pages and elsewhere: 1px-bordered
    cards, field rows, switches, badges. Tokens only. */
@@ -13,7 +14,7 @@ export function reasonFrom(err: unknown): string {
   } catch {
     /* non-serializable — fall through */
   }
-  return "unknown error";
+  return t("unknown error");
 }
 
 export function Field({
@@ -31,9 +32,9 @@ export function Field({
   return (
     <div className="flex min-h-[52px] items-center justify-between gap-6 border-b border-line px-4 py-2.5 last:border-b-0">
       <div className="min-w-0 space-y-0.5">
-        <p className="text-[13px] font-medium text-fg">{label}</p>
-        {description && <p className="line-clamp-2 text-[12px] leading-[18px] text-muted">{description}</p>}
-        {hint && <p className="line-clamp-2 text-[12px] leading-[18px] text-subtle">{hint}</p>}
+        <p className="text-[13px] font-medium text-fg">{t(label)}</p>
+        {description && <p className="line-clamp-2 text-[12px] leading-[18px] text-muted">{t(description)}</p>}
+        {hint && <p className="line-clamp-2 text-[12px] leading-[18px] text-subtle">{t(hint)}</p>}
       </div>
       {children}
     </div>
@@ -43,7 +44,7 @@ export function Field({
 export function Card({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
     <section className="mb-5">
-      {title && <p className="t-meta px-1 pb-2.5 text-subtle">{title}</p>}
+      {title && <p className="t-meta px-1 pb-2.5 text-subtle">{t(title)}</p>}
       <div className="surface overflow-hidden">{children}</div>
     </section>
   );
@@ -109,11 +110,11 @@ export function Stepper({
   const clamp = (v: number) => Math.min(max, Math.max(min, v));
   return (
     <div className="flex h-8 items-center rounded-control bg-accent-soft shadow-[inset_0_0_0_1px_var(--border)]">
-      <button type="button" onClick={() => onChange(clamp(value - step))} className="flex h-full w-8 items-center justify-center text-muted transition-colors hover:text-fg" aria-label="Decrease">
+      <button type="button" onClick={() => onChange(clamp(value - step))} className="flex h-full w-8 items-center justify-center text-muted transition-colors hover:text-fg" aria-label={t("Decrease")}>
         −
       </button>
       <span className="t-meta w-12 text-center text-fg">{value}</span>
-      <button type="button" onClick={() => onChange(clamp(value + step))} className="flex h-full w-8 items-center justify-center text-muted transition-colors hover:text-fg" aria-label="Increase">
+      <button type="button" onClick={() => onChange(clamp(value + step))} className="flex h-full w-8 items-center justify-center text-muted transition-colors hover:text-fg" aria-label={t("Increase")}>
         +
       </button>
     </div>

@@ -4,6 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { ModelsStatus } from "../../types";
 import { formatBytes } from "../../lib/format";
 import { Card, Field } from "./kit";
+import { t } from "../../i18n";
 
 /* Model files — real on-disk artifacts behind the optional neural tier.
    Loads `get_models_status` on mount and polls every 600 ms only while a
@@ -64,15 +65,15 @@ export function ModelFilesCard() {
     prog && prog.total > 0 ? Math.min(100, Math.round((prog.downloaded / prog.total) * 100)) : 0;
 
   return (
-    <Card title="Model files">
+    <Card title={t("Model files")}>
       {/* Directory */}
       {live && status?.dir && (
-        <Field label="Directory" description="Where the model files live on disk.">
+        <Field label={t("Directory")} description={t("Where the model files live on disk.")}>
           <div className="flex min-w-0 items-center gap-1">
             <code className="max-w-56 truncate font-mono text-[11px] text-muted">{status.dir}</code>
             <button
               type="button"
-              title="Copy path"
+              title={t("Copy path")}
               onClick={copyDir}
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-subtle transition-colors hover:bg-accent-soft hover:text-fg"
             >
@@ -84,7 +85,7 @@ export function ModelFilesCard() {
 
       {/* Totals */}
       {live && (
-        <Field label="On disk" description="Bytes of the neural tier present / expected.">
+        <Field label={t("On disk")} description={t("Bytes of the neural tier present / expected.")}>
           <span className="font-mono text-[11px] text-fg">
             {formatBytes(present)} / {formatBytes(expected)}
           </span>
@@ -111,7 +112,7 @@ export function ModelFilesCard() {
       {/* State (read-only — downloads live in setup). */}
       {!live ? (
         <p className="px-4 py-3.5 text-[12px] leading-[18px] text-muted">
-          Model status unavailable — the backend command is not connected yet.
+          {t("Model status unavailable — the backend command is not connected yet.")}
         </p>
       ) : status?.downloading ? (
         <div className="space-y-2 border-t border-line px-4 py-3">
@@ -127,25 +128,25 @@ export function ModelFilesCard() {
               {mb(prog?.downloaded ?? 0)} / {mb(prog?.total || expected)} · {pct}%
             </span>
           </div>
-          <p className="font-mono text-[11px] text-subtle">downloading in setup…</p>
+          <p className="font-mono text-[11px] text-subtle">{t("downloading…")}</p>
         </div>
       ) : status?.error ? (
         <div className="border-t border-line px-4 py-3">
           <p className="break-words text-[11px] text-danger">{status.error}</p>
           <p className="pt-1.5 text-[12px] leading-[18px] text-muted">
-            Use <b>About → Run setup again</b> to retry the download.
+            {t("Use")} <b>{t("About → Run setup again")}</b> {t("to retry the download.")}
           </p>
         </div>
       ) : status?.ready ? (
         <div className="flex items-center gap-1.5 border-t border-line px-4 py-3">
           <span className="h-1.5 w-1.5 rounded-full bg-success" />
-          <p className="text-[12px] font-medium text-fg">Model files ready</p>
+          <p className="text-[12px] font-medium text-fg">{t("Model files ready")}</p>
         </div>
       ) : (
         <div className="border-t border-line px-4 py-3">
           <p className="text-[12px] leading-[18px] text-muted">
-            Not downloaded. Use <b>About → Run setup again</b> to acquire the optional neural
-            tier.
+            {t("Not downloaded. Use")} <b>{t("About → Run setup again")}</b>{" "}
+            {t("to acquire the optional neural tier.")}
           </p>
         </div>
       )}

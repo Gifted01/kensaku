@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Copy } from "lucide-react";
 import { useStats } from "../../hooks/useStats";
 import { Sparkline } from "../Sparkline";
+import { t } from "../../i18n";
 import { Card, Field, Badge } from "./kit";
 import {
   formatBytes,
@@ -97,7 +98,7 @@ export function StatsForNerds() {
           onClick={async () => {
             if (
               !window.confirm(
-                "Rebuild the index from scratch? Kensaku clears the full-text index, semantic units and thumbnails, then rescans your folders.",
+                t("Rebuild the index from scratch? Kensaku clears the full-text index, semantic units and thumbnails, then rescans your folders."),
               )
             )
               return;
@@ -108,19 +109,19 @@ export function StatsForNerds() {
               await invoke("rebuild_index");
             } catch (err) {
               console.error("Rebuild failed:", err);
-              alert("Rebuild failed: " + err);
+              alert(t("Rebuild failed: {error}", { error: String(err) }));
             } finally {
               setRebuilding(false);
             }
           }}
           className="btn btn-secondary h-8 px-3 text-[12px]"
         >
-          {rebuilding ? "Rebuilding…" : ing.is_indexing ? "Indexing…" : "Rebuild index"}
+          {rebuilding ? t("Rebuilding…") : ing.is_indexing ? t("Indexing…") : t("Rebuild index")}
         </button>
       </div>
 
       {/* Latency */}
-      <Card title="Query latency">
+      <Card title={t("Query latency")}>
         <div className="flex items-center gap-5 px-4 py-3.5">
           <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
             <StatNumber value={q.p50_ms.toFixed(1)} suffix="ms" caption="p50" />
@@ -148,7 +149,7 @@ export function StatsForNerds() {
       </Card>
 
       {/* Index composition */}
-      <Card title="Index composition">
+      <Card title={t("Index composition")}>
         <div className="grid grid-cols-2 gap-x-6 px-4 py-3 sm:grid-cols-4">
           <StatNumber value={formatComma(i.files)} caption="files" />
           <StatNumber value={formatComma(i.dirs)} caption="folders" />
@@ -156,16 +157,16 @@ export function StatsForNerds() {
           <StatNumber value={formatComma(i.semantic_units)} caption="semantic units" />
         </div>
         <div className="border-t border-line">
-          <Field label="Tantivy (full-text)" description="BM25 postings + fast fields.">
+          <Field label={t("Tantivy (full-text)")} description={t("BM25 postings + fast fields.")}>
             <span className="font-mono text-[11px] text-fg">{formatBytes(i.tantivy_bytes)}</span>
           </Field>
-          <Field label="Vectors (i8)" description="Static embedding tier.">
+          <Field label={t("Vectors (i8)")} description={t("Static embedding tier.")}>
             <span className="font-mono text-[11px] text-fg">{formatBytes(i.vector_bytes)}</span>
           </Field>
-          <Field label="Metadata (SQLite WAL)" description="Durable truth, mmap snapshot.">
+          <Field label={t("Metadata (SQLite WAL)")} description={t("Durable truth, mmap snapshot.")}>
             <span className="font-mono text-[11px] text-fg">{formatBytes(i.metadata_db_bytes)}</span>
           </Field>
-          <Field label="Last reconcile" description="How fresh the index is, right now.">
+          <Field label={t("Last reconcile")} description={t("How fresh the index is, right now.")}>
             <span className="font-mono text-[11px] text-fg">
               {i.last_reconcile_secs_ago == null ? "—" : `${Math.round(i.last_reconcile_secs_ago)} s ago`}
             </span>
@@ -174,7 +175,7 @@ export function StatsForNerds() {
       </Card>
 
       {/* Ingestion */}
-      <Card title="Ingestion">
+      <Card title={t("Ingestion")}>
         <div className="px-4 py-3.5">
           <div className="flex items-center justify-between gap-4 pb-2">
             <div className="flex items-center gap-2">
@@ -210,7 +211,7 @@ export function StatsForNerds() {
       </Card>
 
       {/* Runtime */}
-      <Card title="Runtime">
+      <Card title={t("Runtime")}>
         <div className="grid grid-cols-2 gap-x-6 px-4 py-3 sm:grid-cols-3">
           <StatNumber value={formatDuration(rt.uptime_secs)} caption="daemon uptime" />
           <StatNumber value={formatBytes(rt.rss_bytes)} caption="rss memory" />
@@ -220,9 +221,9 @@ export function StatsForNerds() {
           />
         </div>
         <div className="flex gap-5 border-t border-line px-4 py-2.5">
-          <Dot ok={rt.watcher_ok} label="watcher" />
-          <Dot ok={rt.semantic_ready} label="semantic ready" />
-          <Dot ok={live} label="live telemetry" />
+          <Dot ok={rt.watcher_ok} label={t("watcher")} />
+          <Dot ok={rt.semantic_ready} label={t("semantic ready")} />
+          <Dot ok={live} label={t("live telemetry")} />
         </div>
       </Card>
     </div>

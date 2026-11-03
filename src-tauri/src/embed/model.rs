@@ -12,6 +12,9 @@ pub const DEFAULT_MODEL_ID: u32 = 1;
 pub const REAL_MODEL_ID: u32 = 2;
 /// Id of the optional ONNX smart embedding pack (`bge-small-en-v1.5`).
 pub const SMART_MODEL_ID: u32 = 3;
+/// Id of the multilingual static table (`potion-multilingual-128M`, 101
+/// languages including Russian).
+pub const MULTILINGUAL_MODEL_ID: u32 = 4;
 
 static GLOBAL: OnceLock<ModelRegistry> = OnceLock::new();
 
@@ -99,6 +102,33 @@ impl ModelRegistry {
         let model_str = config.semantic_model.trim().to_lowercase();
         match model_str.as_str() {
             "none" | "off" | "disabled" => Self::new_none(),
+            "multilingual" | "potion-multilingual" => {
+                let ml_dir = std::env::var_os("KENSAKU_MULTILINGUAL_MODEL_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| dir.join("multilingual"));
+                if let Some(table) = StaticTable::load_with_f32(&ml_dir, config.semantic_f32_table)
+                {
+                    let table = table.with_model_id(MULTILINGUAL_MODEL_ID);
+                    Self {
+                        provider: EmbeddingProviderKind::Static,
+                        model_id: MULTILINGUAL_MODEL_ID,
+                        name: "potion-multilingual-128M".to_string(),
+                        dim: table.dim,
+                        normalize: table.normalize,
+                        fallback_reason: None,
+                        table: Some(Arc::new(table)),
+                        smart: None,
+                    }
+                } else {
+                    let mut reg =
+                        Self::load_with_f32(dir, config.semantic_f32_table).unwrap_or_default();
+                    reg.fallback_reason = Some(format!(
+                        "Multilingual model not found in {}; download it in Settings → Models",
+                        ml_dir.display()
+                    ));
+                    reg
+                }
+            }
             "static" | "potion" => {
                 if let Some(registry) = Self::load_with_f32(dir, config.semantic_f32_table) {
                     registry
@@ -189,6 +219,12 @@ impl ModelRegistry {
             }
             registry
         })
+    }
+
+    /// True when a real (downloaded) embedding model is in use, not the
+    /// hashing estimator.
+    pub fn table_loaded(&self) -> bool {
+        self.table.is_some() || self.smart.is_some()
     }
 
     /// True when semantic indexing and querying are active.

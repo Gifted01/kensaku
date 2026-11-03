@@ -186,6 +186,10 @@ pub struct KensakuConfig {
     /// configs are migrated at load (v5).
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Interface language: `system` (follow the OS), `en` or `ru`. Also
+    /// decides whether OCR reads Cyrillic by default (see `crate::locale`).
+    #[serde(default = "default_language")]
+    pub language: String,
     /// Personal vocabulary: `term` matches any of `expansions`.
     #[serde(default = "default_aliases")]
     pub aliases: Vec<Alias>,
@@ -214,7 +218,16 @@ fn default_true() -> bool {
 /// PP-OCR ships with every installer and is verified at runtime; where it
 /// cannot run (Intel Macs) the engine selection falls back to Tesseract.
 fn default_ocr_engine() -> String {
-    "accurate".to_string()
+    // PP-OCRv6 tiny cannot read Cyrillic; Indra can.
+    if crate::locale::wants_cyrillic("system") {
+        "indra".to_string()
+    } else {
+        "accurate".to_string()
+    }
+}
+
+fn default_language() -> String {
+    "system".to_string()
 }
 
 fn default_app_mode() -> String {
@@ -307,7 +320,7 @@ pub fn normalize_theme(raw: &str) -> String {
 }
 
 /// Version written by this build; see `parse_and_migrate`.
-pub const CURRENT_CONFIG_VERSION: u32 = 6;
+pub const CURRENT_CONFIG_VERSION: u32 = 7;
 
 /// Extensions skipped entirely (not even indexed by name).
 const DEFAULT_EXCLUDED_EXTENSIONS: &[&str] = &[
@@ -438,6 +451,7 @@ impl Default for KensakuConfig {
             ocr_engine: default_ocr_engine(),
             app_mode: default_app_mode(),
             theme: default_theme(),
+            language: default_language(),
             aliases: default_aliases(),
             saved_searches: Vec::new(),
             pins: Vec::new(),
@@ -582,6 +596,21 @@ impl KensakuConfig {
                 cfg.content_depth = default_content_depth();
             }
             cfg.config_version = 6;
+            migrated = true;
+        }
+
+        if cfg.config_version < 7 {
+            // v7: Russian / Cyrillic support. The PP-OCRv6 tiny dictionary has
+            // no Cyrillic letters, so on a Cyrillic-script system the default
+            // PP-OCR engine moves to Indra, whose base recognizer reads Latin
+            // and Cyrillic (it falls back to PP-OCR, then Tesseract).
+            cfg.language = crate::locale::normalize_language(&cfg.language);
+            if cfg.ocr_engine.eq_ignore_ascii_case(crate::ocr::ACCURATE)
+                && crate::locale::wants_cyrillic(&cfg.language)
+            {
+                cfg.ocr_engine = crate::ocr::INDRA.to_string();
+            }
+            cfg.config_version = 7;
             migrated = true;
         }
 

@@ -3,6 +3,37 @@
 All notable changes to Kensaku. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Russian interface: every screen, the setup wizard and the tray menu. The
+  language follows the system or is picked in Settings → General (`language`
+  in `config.json`). Strings are wrapped in `t()` with English as the key;
+  `node tools/check-i18n.mjs` reports untranslated strings, so another
+  language (#70) only needs a dictionary.
+- Russian morphology in full-text search: Cyrillic words are indexed and
+  queried by their Snowball stem (`договоры` finds `договора`), `ё` = `е`.
+  Content schema v4 rebuilds the index once.
+- Natural-language queries in Russian: dates, types, sizes, sort words and
+  standard folders (`скриншоты за прошлую неделю`, `самые большие видео в
+  загрузках`).
+- Optional multilingual meaning search: `potion-multilingual-128M` (101
+  languages) with a built-in HuggingFace tokenizer (Unigram/SentencePiece,
+  Metaspace, WordPiece), verified against `tokenizers` 0.23.
+- Cyrillic OCR: Tesseract downloads `rus.traineddata` and runs `rus+eng` on
+  Cyrillic systems; Indra OCR becomes the default engine there.
+
+### Fixed
+- Filename prefilter folded case only for ASCII, so a lowercase Cyrillic
+  query skipped capitalized names (`договор` missed `Договор.pdf`).
+- `presentations` / `slides` / `spreadsheets` mapped to `type:doc`, which
+  excludes `.pptx` and `.xlsx`; they now map to `type:presentation` and
+  `type:sheet`.
+- Windows: Tesseract received non-ANSI paths (Cyrillic file or user names on
+  an English Windows) as `?`; such paths now use 8.3 short names or stdin.
+- PP-OCRv6 was documented as reading Cyrillic; its dictionary has none.
+- Model checksums are streamed instead of reading the whole file into memory.
+
 ## [1.0.12] — 2026-11-03
 
 ### Added

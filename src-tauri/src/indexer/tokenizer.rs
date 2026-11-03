@@ -4,8 +4,9 @@
 //! for CJK text (Han, Hiragana, Katakana, Hangul) while preserving Tantivy's
 //! SimpleTokenizer behavior for Latin text, code identifiers, numbers, and paths.
 
+use rust_stemmers::{Algorithm, Stemmer};
 use tantivy::tokenizer::{
-    LowerCaser, RemoveLongFilter, TextAnalyzer, Token, TokenStream, Tokenizer,
+    LowerCaser, RemoveLongFilter, TextAnalyzer, Token, TokenFilter, TokenStream, Tokenizer,
 };
 
 /// Returns true if `ch` falls within recognized CJK Unicode blocks:
@@ -156,12 +157,101 @@ impl<'a> KensakuTokenStream<'a> {
     }
 }
 
+/// Returns true for letters of the basic Cyrillic block (А–я, Ё/ё and the
+/// other national letters in U+0400–U+04FF).
+#[inline]
+pub fn is_cyrillic(ch: char) -> bool {
+    matches!(ch as u32, 0x0400..=0x04FF)
+}
+
+/// Morphology filter for Russian.
+///
+/// Tokens made only of Cyrillic letters are folded (`ё` → `е`) and reduced to
+/// their Snowball stem, so `договор`, `договора` and `договорами` all index
+/// and query as the same term. Every other token (Latin, numbers, code
+/// identifiers, CJK n-grams, mixed `2026г`) passes through unchanged, so the
+/// existing behaviour for non-Russian text is preserved exactly.
+///
+/// The same analyzer runs at index and at query time (Tantivy's QueryParser
+/// uses the field's tokenizer), so both sides are stemmed consistently.
+#[derive(Clone, Copy, Default)]
+pub struct RussianMorphology;
+
+impl TokenFilter for RussianMorphology {
+    type Tokenizer<T: Tokenizer> = RussianMorphologyFilter<T>;
+
+    fn transform<T: Tokenizer>(self, tokenizer: T) -> RussianMorphologyFilter<T> {
+        RussianMorphologyFilter { inner: tokenizer }
+    }
+}
+
+#[derive(Clone)]
+pub struct RussianMorphologyFilter<T> {
+    inner: T,
+}
+
+impl<T: Tokenizer> Tokenizer for RussianMorphologyFilter<T> {
+    type TokenStream<'a> = RussianMorphologyStream<T::TokenStream<'a>>;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        RussianMorphologyStream {
+            tail: self.inner.token_stream(text),
+            stemmer: Stemmer::create(Algorithm::Russian),
+        }
+    }
+}
+
+pub struct RussianMorphologyStream<T> {
+    tail: T,
+    stemmer: Stemmer,
+}
+
+impl<T: TokenStream> TokenStream for RussianMorphologyStream<T> {
+    fn advance(&mut self) -> bool {
+        if !self.tail.advance() {
+            return false;
+        }
+        let token = self.tail.token_mut();
+        if !token.text.is_empty() && token.text.chars().all(is_cyrillic) {
+            let folded = token.text.replace('ё', "е");
+            let stem = self.stemmer.stem(&folded).into_owned();
+            // Never stem a word away entirely: very short words keep their form.
+            token.text = if stem.is_empty() { folded } else { stem };
+        }
+        true
+    }
+
+    fn token(&self) -> &Token {
+        self.tail.token()
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        self.tail.token_mut()
+    }
+}
+
+/// Stems one already-lowercased word the way the index does. Used by callers
+/// that compare words outside Tantivy (e.g. snippet highlighting).
+pub fn normalize_word(word: &str) -> String {
+    let lower = word.to_lowercase();
+    if !lower.is_empty() && lower.chars().all(is_cyrillic) {
+        let folded = lower.replace('ё', "е");
+        let stem = Stemmer::create(Algorithm::Russian)
+            .stem(&folded)
+            .into_owned();
+        if stem.is_empty() { folded } else { stem }
+    } else {
+        lower
+    }
+}
+
 /// Builds the default text analyzer for Kensaku fields using the CJK-aware tokenizer,
-/// length filter, and lowercaser.
+/// length filter, lowercaser and Russian morphology.
 pub fn kensaku_analyzer() -> TextAnalyzer {
     TextAnalyzer::builder(KensakuTokenizer::default())
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser)
+        .filter(RussianMorphology)
         .build()
 }
 
@@ -328,6 +418,56 @@ mod tests {
         let tokens = analyze(&text);
         let texts: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(texts, vec!["short"]);
+    }
+
+    fn texts(text: &str) -> Vec<String> {
+        analyze(text).into_iter().map(|t| t.text).collect()
+    }
+
+    #[test]
+    fn russian_word_forms_share_one_stem() {
+        let forms = [
+            "договор",
+            "договора",
+            "договору",
+            "договором",
+            "договорами",
+            "Договоров",
+        ];
+        let stems: Vec<String> = forms.iter().map(|f| texts(f).remove(0)).collect();
+        assert!(stems.iter().all(|s| s == &stems[0]), "{stems:?}");
+
+        let a = texts("лицензия");
+        let b = texts("лицензии");
+        let c = texts("лицензий");
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+    }
+
+    #[test]
+    fn yo_is_folded_to_ye() {
+        assert_eq!(texts("ёлка"), texts("елка"));
+        assert_eq!(texts("Счёт"), texts("счет"));
+    }
+
+    #[test]
+    fn non_cyrillic_tokens_are_untouched_by_morphology() {
+        assert_eq!(
+            texts("Kaspersky Endpoint running 2026г"),
+            vec!["kaspersky", "endpoint", "running", "2026г"]
+        );
+        // Offsets still point at the original surface form for highlighting.
+        let tokens = analyze("Договорами Solar");
+        assert_eq!(tokens[0].offset_from, 0);
+        assert_eq!(tokens[0].offset_to, "Договорами".len());
+        assert_eq!(tokens[1].text, "solar");
+    }
+
+    #[test]
+    fn normalize_word_matches_analyzer() {
+        for w in ["Спецификации", "КП", "pdf", "отчётов"] {
+            assert_eq!(vec![normalize_word(w)], texts(w));
+        }
     }
 
     #[test]

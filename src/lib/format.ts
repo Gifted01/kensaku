@@ -1,38 +1,41 @@
 /* Formatting helpers shared across components. Monospace-facing so that
    numbers tabulate cleanly in the status bar, stats and result rows. */
 
+import { locale, t, tn } from "../i18n";
+
 export function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return "0 B";
+  const sizes = [t("B"), t("KB"), t("MB"), t("GB"), t("TB")];
+  if (!bytes || bytes <= 0) return `0 ${sizes[0]}`;
   const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   const v = bytes / Math.pow(k, i);
-  return `${v >= 100 ? Math.round(v) : parseFloat(v.toFixed(1))} ${sizes[i]}`;
+  const shown = v >= 100 ? Math.round(v) : parseFloat(v.toFixed(1));
+  return `${shown.toLocaleString(locale())} ${sizes[i]}`;
 }
 
 export function formatComma(n: number): string {
-  return n.toLocaleString("en-US");
+  return n.toLocaleString(locale());
 }
 
 export function formatRelativeTime(secs: number): string {
   if (!secs) return "";
   const now = Math.floor(Date.now() / 1000);
   const diff = Math.max(0, now - secs);
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)}d ago`;
-  if (diff < 86400 * 365) return `${Math.floor(diff / (86400 * 30))}mo ago`;
-  return new Date(secs * 1000).toLocaleDateString();
+  if (diff < 60) return t("just now");
+  if (diff < 3600) return t("{n}m ago", { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t("{n}h ago", { n: Math.floor(diff / 3600) });
+  if (diff < 86400 * 30) return tn(Math.floor(diff / 86400), "{n}d ago", "{n}d ago");
+  if (diff < 86400 * 365) return t("{n}mo ago", { n: Math.floor(diff / (86400 * 30)) });
+  return new Date(secs * 1000).toLocaleDateString(locale());
 }
 
 export function formatDuration(secs: number): string {
-  if (!secs || secs <= 0) return "0s";
-  if (secs < 60) return `${Math.round(secs)}s`;
+  if (!secs || secs <= 0) return t("{s}s", { s: 0 });
+  if (secs < 60) return t("{s}s", { s: Math.round(secs) });
   const m = Math.floor(secs / 60);
   const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h ${m % 60}m`;
-  return `${m}m ${Math.floor(secs % 60)}s`;
+  if (h > 0) return t("{h}h {m}m", { h, m: m % 60 });
+  return t("{m}m {s}s", { m, s: Math.floor(secs % 60) });
 }
 
 /** Extracts the free-text search terms, dropping `filter:` tokens. */
@@ -52,7 +55,7 @@ export function highlightSegments(
   const lower = text.toLowerCase();
   type Seg = { start: number; end: number };
   const ranges: Seg[] = [];
-  for (const term of terms) {
+  for (const term of terms.flatMap((x) => [x, ruStem(x)])) {
     let idx = lower.indexOf(term);
     while (idx !== -1 && term.length > 0) {
       ranges.push({ start: idx, end: idx + term.length });
@@ -87,7 +90,28 @@ export function latencyToken(ms: number): string {
 }
 
 export function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() || p;
+  return p.split(/[\\/]/).filter(Boolean).pop() || p;
+}
+
+/* Russian word endings, longest first. Search matches word forms by stem
+   (the index uses a Snowball stemmer), so highlighting strips the ending too:
+   the query "договоры" highlights "договора" in a snippet. Deliberately crude:
+   it only decides what to underline, never what matches. */
+const RU_ENDINGS = [
+  "иями", "ями", "ами", "ого", "его", "ому", "ему", "ыми", "ими", "иях", "ией",
+  "ах", "ях", "ой", "ей", "ом", "ем", "ам", "ям", "ов", "ев", "ия", "ии", "ию",
+  "ий", "ые", "ие", "ый", "ая", "яя", "ое", "ее", "ую", "юю", "ы", "и", "а",
+  "я", "у", "ю", "е", "о", "ь", "й",
+];
+
+/** Stem of a Cyrillic word for highlighting; other text is returned as is. */
+export function ruStem(word: string): string {
+  const w = word.toLowerCase().replace(/ё/g, "е");
+  if (!/^[\u0400-\u04FF]+$/.test(w) || w.length < 5) return w;
+  for (const end of RU_ENDINGS) {
+    if (w.endsWith(end) && w.length - end.length >= 4) return w.slice(0, -end.length);
+  }
+  return w;
 }
 
 /** Parent folder for display: home collapsed to ~, long paths keep the tail. */

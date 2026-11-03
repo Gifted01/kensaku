@@ -5,6 +5,7 @@ import { isThumbImage, useThumbnail } from "../lib/thumbnails";
 import { formatBytes, formatRelativeTime } from "../lib/format";
 import { HoverDetails } from "./HoverDetails";
 import { TypeTile } from "./TypeTile";
+import { t, useLanguage } from "../i18n";
 
 /* Result card. A 16:10 tile, then name and one meta line below it — the
    same card the home screen's recents use. Images fill the tile edge to
@@ -29,12 +30,13 @@ interface ResultItemProps {
 
 export const ResultItem = React.memo<ResultItemProps>(
   ({ result, query, index, isSelected, onSelect, onOpen, onContextMenu, showThumbs }) => {
+    useLanguage();
     const imageEligible = Boolean(showThumbs) && !result.is_dir && isThumbImage(result.filename);
     const { src: thumbSrc, failed: thumbFailed } = useThumbnail(result.path, imageEligible);
     const hasThumb = Boolean(thumbSrc) && !thumbFailed;
 
     const meta = result.is_dir
-      ? `Folder · ${formatRelativeTime(result.modified)}`
+      ? `${t("Folder")} · ${formatRelativeTime(result.modified)}`
       : `${formatBytes(result.file_size)} · ${formatRelativeTime(result.modified)}`;
 
     return (

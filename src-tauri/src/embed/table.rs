@@ -41,6 +41,9 @@ pub struct StaticTable {
     pub model_id: u32,
     continuing_prefix: String,
     max_input_chars: usize,
+    /// Generic HuggingFace tokenizer for non-BERT models (SentencePiece
+    /// Unigram, Metaspace...). `None` keeps the original WordPiece path.
+    hf: Option<crate::embed::hf_tokenizer::HfTokenizer>,
 }
 
 impl StaticTable {
@@ -69,7 +72,29 @@ impl StaticTable {
 
         let tokenizer_bytes = std::fs::read(dir.join("tokenizer.json")).ok()?;
         let tokenizer: Value = serde_json::from_slice(&tokenizer_bytes).ok()?;
-        let tokenizer_parts = parse_tokenizer(&tokenizer, vocab_size)?;
+        drop(tokenizer_bytes);
+        // BERT WordPiece models (potion-base-8M) keep the original, tested
+        // path; anything else (XLM-R SentencePiece in potion-multilingual)
+        // goes through the generic HuggingFace pipeline.
+        let (tokenizer_parts, hf) = if is_bert_wordpiece(&tokenizer) {
+            (parse_tokenizer(&tokenizer, vocab_size)?, None)
+        } else {
+            let hf = crate::embed::hf_tokenizer::HfTokenizer::parse(&tokenizer)?;
+            if hf.vocab_size > vocab_size {
+                return None;
+            }
+            (
+                TokenizerParts {
+                    vocab: HashMap::new(),
+                    unknown_id: hf.unk_id().unwrap_or(u32::MAX),
+                    lowercase: false,
+                    continuing_prefix: String::new(),
+                    max_input_chars: 0,
+                },
+                Some(hf),
+            )
+        };
+        drop(tokenizer);
 
         let normalize = match std::fs::read(dir.join("config.json")) {
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
@@ -117,7 +142,15 @@ impl StaticTable {
             model_id: crate::embed::model::REAL_MODEL_ID,
             continuing_prefix: tokenizer_parts.continuing_prefix,
             max_input_chars: tokenizer_parts.max_input_chars,
+            hf,
         })
+    }
+
+    /// Sets the model id reported for this table (distinguishes the English
+    /// and multilingual tables so switching models re-embeds everything).
+    pub fn with_model_id(mut self, model_id: u32) -> Self {
+        self.model_id = model_id;
+        self
     }
 
     /// Heap bytes held by the embedding matrix and its scales.
@@ -134,6 +167,13 @@ impl StaticTable {
 
     /// Encodes `text` to WordPiece ids, without any special tokens.
     pub fn token_ids(&self, text: &str) -> Vec<u32> {
+        if let Some(hf) = &self.hf {
+            // model2vec drops the unknown token before mean pooling.
+            let unk = hf.unk_id();
+            let mut ids = hf.encode(text, MAX_TOKENS);
+            ids.retain(|id| Some(*id) != unk);
+            return ids;
+        }
         let mut ids = Vec::new();
         for word in self.pre_tokenize(text) {
             self.tokenize_word(&word, &mut ids);
@@ -283,6 +323,7 @@ impl StaticTable {
             lowercase: true,
             normalize: true,
             model_id: crate::embed::model::REAL_MODEL_ID,
+            hf: None,
             continuing_prefix: "##".to_string(),
             max_input_chars: 100,
         }
@@ -300,6 +341,7 @@ impl StaticTable {
             lowercase: true,
             normalize: true,
             model_id: crate::embed::model::REAL_MODEL_ID,
+            hf: None,
             continuing_prefix: "##".to_string(),
             max_input_chars: 100,
         }
@@ -365,6 +407,25 @@ fn l2_normalize(values: &mut [f32]) {
             *value /= norm;
         }
     }
+}
+
+/// True for the classic BERT tokenizer the original loader was written for.
+fn is_bert_wordpiece(value: &Value) -> bool {
+    let model = value.get("model");
+    let is_wordpiece = model
+        .and_then(|m| m.get("type"))
+        .and_then(Value::as_str)
+        .map(|t| t == "WordPiece")
+        .unwrap_or_else(|| {
+            model
+                .and_then(|m| m.get("vocab"))
+                .is_some_and(Value::is_object)
+        });
+    let pre = value
+        .get("pre_tokenizer")
+        .and_then(|p| p.get("type"))
+        .and_then(Value::as_str);
+    is_wordpiece && matches!(pre, None | Some("BertPreTokenizer"))
 }
 
 struct TokenizerParts {

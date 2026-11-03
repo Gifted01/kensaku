@@ -69,6 +69,7 @@ impl HeadlessIndex {
         // The headless surface must honor the same OCR setting as the GUI.
         crate::indexer::extract::set_ocr_enabled(config.ocr_enabled);
         crate::indexer::extract::image::set_ocr_max_image_bytes(config.ocr_max_image_bytes);
+        crate::indexer::extract::image::set_cyrillic_ocr(crate::locale::wants_cyrillic(&config.language));
         crate::indexer::extract::set_content_caps(config.content_max_file_size_mb, config.content_max_text_bytes);
         crate::embed::set_max_semantic_units(config.content_max_semantic_units);
         crate::ocr::set_engine(&config.ocr_engine);

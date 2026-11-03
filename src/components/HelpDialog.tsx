@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { X } from "lucide-react";
+import { t, useLanguage } from "../i18n";
 
 const KEYS: [string, string][] = [
   ["Alt+Space", "show or hide the window"],
@@ -29,10 +30,12 @@ const FILTERS: [string, string][] = [
   ["content:timeout", "match file contents only"],
   ["re:\"fn \\\\w+\"", "regular expression"],
   ['"last Tuesday"', "time travel filter"],
+  ["скриншоты за прошлую неделю", "plain Russian works too: dates, types, sizes, folders"],
   ["mouse near[5] button", "terms within 5 words"],
 ];
 
 export function HelpDialog({ onClose }: { onClose: () => void }) {
+  useLanguage();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" || e.key === "?") {
@@ -48,7 +51,7 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
     <div className="fade-in fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6 backdrop-blur-[6px]">
       <div className="elevated overlay-in max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-sheet p-6">
         <div className="flex items-center justify-between pb-3">
-          <h2 className="t-title text-fg">How to search</h2>
+          <h2 className="t-title text-fg">{t("How to search")}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -58,26 +61,26 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <section className="pb-4">
-          <h3 className="t-meta pb-2 pt-4 text-subtle">Keyboard</h3>
+          <h3 className="t-meta pb-2 pt-4 text-subtle">{t("Keyboard")}</h3>
           <table className="w-full">
             <tbody>
               {KEYS.map(([k, v]) => (
                 <tr key={k} className="border-t border-line">
                   <td className="t-meta py-2 pr-6 text-fg">{k}</td>
-                  <td className="py-2 text-[13px] text-muted">{v}</td>
+                  <td className="py-2 text-[13px] text-muted">{t(v)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </section>
         <section>
-          <h3 className="t-meta pb-2 pt-4 text-subtle">Filters</h3>
+          <h3 className="t-meta pb-2 pt-4 text-subtle">{t("Filters")}</h3>
           <table className="w-full">
             <tbody>
               {FILTERS.map(([k, v]) => (
                 <tr key={k} className="border-t border-line">
                   <td className="t-meta py-2 pr-6 text-fg">{k}</td>
-                  <td className="py-2 text-[13px] text-muted">{v}</td>
+                  <td className="py-2 text-[13px] text-muted">{t(v)}</td>
                 </tr>
               ))}
             </tbody>

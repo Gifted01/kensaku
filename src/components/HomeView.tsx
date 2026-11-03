@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { formatRelativeTime } from "../lib/format";
 import { isThumbImage, useThumbnail } from "../lib/thumbnails";
 import { TypeTile } from "./TypeTile";
+import { t, useLanguage } from "../i18n";
 
 /* Home. The field above is the invitation; below it, what you touched
    last, as tiles. Saved searches sit on one quiet line above. With nothing
@@ -23,6 +24,7 @@ function RecentTile({
   focused?: boolean;
   onOpen: () => void;
 }) {
+  useLanguage();
   const eligible = Boolean(showThumbs) && !item.is_dir && isThumbImage(item.filename);
   const { src, failed } = useThumbnail(item.path, eligible);
   const name = item.filename || item.path;
@@ -56,7 +58,7 @@ function RecentTile({
       <span className="flex min-w-0 flex-col px-0.5 pt-2">
         <span className="truncate text-[13px] font-medium leading-[18px] text-fg">{name}</span>
         <span className="t-meta truncate text-subtle">
-          {item.last_open > 0 ? `Opened ${formatRelativeTime(item.last_open)}` : formatRelativeTime(item.modified)}
+          {item.last_open > 0 ? t("Opened {when}", { when: formatRelativeTime(item.last_open) }) : formatRelativeTime(item.modified)}
         </span>
       </span>
     </button>
@@ -77,6 +79,7 @@ export function HomeView({
   /** Keyboard-walk selection; mirrors the launcher's result selection. */
   focusIndex?: number | null;
 }) {
+  useLanguage();
   if (!data) return null;
   const recent = data.recent.slice(0, 18);
   const saved = data.saved_searches ?? [];
@@ -84,17 +87,17 @@ export function HomeView({
   if (recent.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-start justify-end gap-4 px-4 pb-8">
-        <p className="t-moment rise-in max-w-md text-muted">Ask for a file the way you'd describe it to a friend.</p>
+        <p className="t-moment rise-in max-w-md text-muted">{t("Ask for a file the way you'd describe it to a friend.")}</p>
         <div className="flex flex-wrap gap-1.5">
           {SUGGESTIONS.map((q, i) => (
             <button
               key={q}
               type="button"
-              onClick={() => onSearch(q)}
+              onClick={() => onSearch(t(q))}
               style={{ ["--stagger-delay" as string]: `${120 + i * 50}ms` }}
               className="btn btn-secondary rise-in h-8 !rounded-full"
             >
-              {q}
+              {t(q)}
             </button>
           ))}
         </div>
@@ -106,7 +109,7 @@ export function HomeView({
     <div className="px-3.5 pb-4 pt-1.5">
       {saved.length > 0 && (
         <div className="mb-4 flex flex-wrap items-baseline gap-x-5 gap-y-2">
-          <span className="t-meta text-subtle">Saved</span>
+          <span className="t-meta text-subtle">{t("Saved")}</span>
           {saved.map((s) => (
             <button
               key={s.name}
@@ -119,7 +122,7 @@ export function HomeView({
           ))}
         </div>
       )}
-      <p className="t-meta mb-2.5 px-0.5 text-subtle">Recent</p>
+      <p className="t-meta mb-2.5 px-0.5 text-subtle">{t("Recent")}</p>
       <div className="grid gap-x-3 gap-y-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(168px, 1fr))" }}>
         {recent.map((r, i) => (
           <RecentTile

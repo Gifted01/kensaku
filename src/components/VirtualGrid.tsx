@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { t } from "../i18n";
 
 /* Windowed results. Only rows inside the viewport (plus overscan) are mounted,
    so long result sets stay as light as short ones. Grid mode fits as many
@@ -152,7 +153,7 @@ export function VirtualGrid<T>({
       <div style={{ height: contentHeight, position: "relative" }}>{rows}</div>
       {loading && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center">
-          <span className="elevated fade-in t-meta !rounded-full px-3 py-1 text-muted">Loading more</span>
+          <span className="elevated fade-in t-meta !rounded-full px-3 py-1 text-muted">{t("Loading more")}</span>
         </div>
       )}
     </div>

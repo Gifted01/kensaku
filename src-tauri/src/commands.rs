@@ -699,6 +699,9 @@ pub async fn get_ocr_status() -> Result<OcrStatus, String> {
 pub async fn download_ocr_language() -> Result<OcrStatus, String> {
     tauri::async_runtime::spawn_blocking(|| {
         image::download_eng_tessdata()?;
+        if image::cyrillic_ocr() {
+            image::download_rus_tessdata()?;
+        }
         Ok::<OcrStatus, String>(image::ocr_status())
     })
     .await
@@ -729,6 +732,19 @@ pub async fn get_indra_pack_status() -> Result<crate::models::ModelsStatus, Stri
 pub async fn download_indra_pack() -> Result<crate::models::ModelsStatus, String> {
     crate::models::download_indra_pack();
     Ok(crate::models::indra_status())
+}
+
+/// Reports the multilingual semantic model inventory.
+#[tauri::command]
+pub async fn get_multilingual_status() -> Result<crate::models::ModelsStatus, String> {
+    Ok(crate::models::multilingual_status())
+}
+
+/// Starts the background download of the multilingual semantic model.
+#[tauri::command]
+pub async fn download_multilingual_model() -> Result<crate::models::ModelsStatus, String> {
+    crate::models::download_multilingual();
+    Ok(crate::models::multilingual_status())
 }
 
 /// Reports the optional smart embedding pack inventory.
@@ -1016,6 +1032,7 @@ pub async fn complete_setup(
 
     crate::indexer::extract::set_ocr_enabled(config.ocr_enabled);
     crate::indexer::extract::image::set_ocr_max_image_bytes(config.ocr_max_image_bytes);
+    crate::indexer::extract::image::set_cyrillic_ocr(crate::locale::wants_cyrillic(&config.language));
     crate::indexer::extract::set_content_caps(config.content_max_file_size_mb, config.content_max_text_bytes);
     crate::embed::set_max_semantic_units(config.content_max_semantic_units);
     crate::ocr::set_engine(&config.ocr_engine);

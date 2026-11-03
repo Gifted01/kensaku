@@ -1,3 +1,4 @@
+pub mod hf_tokenizer;
 pub mod model;
 pub mod provider;
 pub mod queue;
