@@ -229,6 +229,12 @@ impl ModelRegistry {
         self.table.is_some() || self.smart.is_some()
     }
 
+    /// Token strings the active table produces for `text`; `None` with the
+    /// hashing estimator or the ONNX provider.
+    pub fn token_pieces(&self, text: &str) -> Option<Vec<String>> {
+        self.table.as_ref().map(|t| t.token_pieces(text))
+    }
+
     /// True when semantic indexing and querying are active.
     pub fn is_enabled(&self) -> bool {
         self.provider != EmbeddingProviderKind::None

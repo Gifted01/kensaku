@@ -173,6 +173,18 @@ impl StaticTable {
         })
     }
 
+    /// Token strings for `text` (diagnostics: `kensaku-cli probe`).
+    pub fn token_pieces(&self, text: &str) -> Vec<String> {
+        if let Some(hf) = &self.hf {
+            return hf.tokens(text);
+        }
+        let reverse: HashMap<u32, &str> = self.vocab.iter().map(|(k, v)| (*v, k.as_str())).collect();
+        self.token_ids(text)
+            .into_iter()
+            .map(|id| reverse.get(&id).copied().unwrap_or("[UNK]").to_string())
+            .collect()
+    }
+
     /// Sets the model id reported for this table (distinguishes the English
     /// and multilingual tables so switching models re-embeds everything).
     pub fn with_model_id(mut self, model_id: u32) -> Self {

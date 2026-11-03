@@ -22,6 +22,7 @@ USAGE:
     kensaku-cli mcp
     kensaku-cli serve [--port N]
     kensaku-cli connect <claude-desktop|claude-code|cursor> [--write]
+    kensaku-cli probe \"<text>\" \"<text>\" [...]   meaning-search diagnostics: tokens and similarity
     kensaku-cli --help | -h | help
 
 EXIT CODES:
@@ -56,6 +57,7 @@ where
         },
         "serve" => run_serve(&args[1..]),
         "connect" => connect::run_cli(&args[1..]),
+        "probe" => run_probe(&args[1..]),
         "-h" | "--help" | "help" => {
             println!("{}", USAGE);
             EXIT_OK
@@ -67,6 +69,54 @@ where
             EXIT_USAGE
         }
     }
+}
+
+/// Shows how the configured meaning-search model sees some texts: which model
+/// loaded (or why not), the tokens of each text and the cosine similarity of
+/// every text to the first one, next to the floor a meaning-only hit needs.
+fn run_probe(args: &[String]) -> i32 {
+    let texts: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
+    if texts.is_empty() {
+        eprintln!("kensaku-cli probe: give at least one text, e.g. probe \"кот спит\" \"животное отдыхает\"");
+        return EXIT_USAGE;
+    }
+    let model = crate::embed::model::ModelRegistry::global();
+    println!("model: {} (id {}, provider {})", model.name, model.model_id, model.provider);
+    if let Some(reason) = &model.fallback_reason {
+        println!("fallback: {reason}");
+    }
+    println!(
+        "floor for meaning-only hits: {:.2}",
+        crate::search::semantic_floor_for(model)
+    );
+    let vectors: Vec<Vec<f32>> = texts.iter().map(|t| model.embed(t)).collect();
+    for (i, text) in texts.iter().enumerate() {
+        println!();
+        println!("[{}] {}", i + 1, text);
+        if let Some(pieces) = model.token_pieces(text) {
+            println!("    tokens: {}", pieces.join(" "));
+        }
+        if i > 0 {
+            println!("    similarity to [1]: {:.3}", cosine(&vectors[0], &vectors[i]));
+        }
+    }
+    if texts.len() > 2 {
+        println!();
+        println!("all pairs:");
+        for i in 0..texts.len() {
+            for j in (i + 1)..texts.len() {
+                println!("    [{}]–[{}]  {:.3}", i + 1, j + 1, cosine(&vectors[i], &vectors[j]));
+            }
+        }
+    }
+    EXIT_OK
+}
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
 }
 
 #[derive(Debug)]

@@ -513,6 +513,11 @@ pub struct SearchResponse {
     pub facets: Facets,
 }
 
+/// Minimum cosine a meaning-only hit (not also found by name or words) needs.
+pub fn semantic_floor_for(model: &ModelRegistry) -> f32 {
+    if model.has_static_table() { 0.28 } else { 0.12 }
+}
+
 pub struct SearchDispatcher;
 
 impl SearchDispatcher {
@@ -1161,7 +1166,7 @@ impl SearchDispatcher {
         // also match fuzzy/BM25 still contribute; the floor below is applied
         // only when creating a semantic-only candidate.
         let model = ModelRegistry::global();
-        let semantic_floor = if model.has_static_table() { 0.28 } else { 0.12 };
+        let semantic_floor = semantic_floor_for(model);
         let mut semantic_ranks: HashMap<PathBuf, (usize, f32, (usize, usize))> = HashMap::new();
         if semantic_enabled
             && model.is_enabled()
