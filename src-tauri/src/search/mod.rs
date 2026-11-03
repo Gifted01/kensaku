@@ -511,6 +511,11 @@ pub struct SearchResponse {
     /// Server-side counts over the full matched set (before the display limit).
     #[serde(default)]
     pub facets: Facets,
+    /// True when the natural-language reading of the query matched nothing
+    /// and these results are for the words as typed. `interpretation` then
+    /// lists the filters that were tried and dropped.
+    #[serde(default)]
+    pub literal_fallback: bool,
 }
 
 /// Minimum cosine a meaning-only hit (not also found by name or words) needs.
@@ -791,6 +796,10 @@ impl SearchDispatcher {
         )
     }
 
+    /// Runs the query as interpreted (natural-language filters), and once more
+    /// as typed when that reading filters everything out. "журнал учёта" or
+    /// "log rotation notes" read as a type filter would otherwise show nothing,
+    /// although the words alone match files.
     #[allow(clippy::too_many_arguments)]
     fn search_response_with_snippets(
         raw_query: &str,
@@ -807,6 +816,57 @@ impl SearchDispatcher {
         offset: usize,
         start_after: Option<&str>,
     ) -> SearchResponse {
+        let run = |interpret: bool| {
+            Self::search_response_once(
+                raw_query,
+                metadata,
+                content_index,
+                unit_store,
+                visual_store,
+                semantic_enabled,
+                limit,
+                seq,
+                with_snippets,
+                sort,
+                aliases,
+                offset,
+                start_after,
+                interpret,
+            )
+        };
+        let interpreted = run(true);
+        let first_page = offset == 0 && start_after.is_none();
+        if !first_page || interpreted.total > 0 || !has_filtering_chip(&interpreted.interpretation)
+        {
+            return interpreted;
+        }
+        let mut literal = run(false);
+        if literal.total == 0 {
+            return interpreted;
+        }
+        literal.literal_fallback = true;
+        literal.interpretation = interpreted.interpretation;
+        literal.search_time_ms += interpreted.search_time_ms;
+        literal
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn search_response_once(
+        raw_query: &str,
+        metadata: &MetadataStore,
+        content_index: &Option<ContentIndex>,
+        unit_store: Option<&UnitStore>,
+        visual_store: Option<&crate::embed::visual::VisualStore>,
+        semantic_enabled: bool,
+        limit: usize,
+        seq: u64,
+        with_snippets: bool,
+        sort: SortOrder,
+        aliases: &[(String, Vec<String>)],
+        offset: usize,
+        start_after: Option<&str>,
+        interpret: bool,
+    ) -> SearchResponse {
         let start_time = SystemTime::now();
         let trimmed = raw_query.trim();
         if trimmed.is_empty() {
@@ -820,11 +880,16 @@ impl SearchDispatcher {
                 mode: "ranked".to_string(),
                 interpretation: Vec::new(),
                 facets: Facets::default(),
+                literal_fallback: false,
             };
         }
 
         // Deterministic natural-language pass. Explicit grammar is left alone.
-        let intent = crate::query::intent::compile_with_aliases(raw_query, aliases);
+        let intent = if interpret {
+            crate::query::intent::compile_with_aliases(raw_query, aliases)
+        } else {
+            crate::query::intent::literal_with_aliases(raw_query, aliases)
+        };
         let effective_query = intent.query.as_str();
         let sort = if sort == SortOrder::Best {
             intent
@@ -1119,6 +1184,7 @@ impl SearchDispatcher {
                 mode: "exhaustive".to_string(),
                 interpretation: intent.chips.clone(),
                 facets,
+                literal_fallback: false,
             };
         }
 
@@ -1581,8 +1647,17 @@ impl SearchDispatcher {
             mode: "ranked".to_string(),
             interpretation: intent.chips,
             facets,
+            literal_fallback: false,
         }
     }
+}
+
+/// True when an interpretation narrows the results (type, time, size or
+/// place); a sort or an alias expansion never removes a match.
+fn has_filtering_chip(chips: &[crate::query::intent::InterpretationChip]) -> bool {
+    chips
+        .iter()
+        .any(|c| matches!(c.kind.as_str(), "type" | "time" | "size" | "place"))
 }
 
 /// Final score for a fused candidate.

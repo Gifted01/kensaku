@@ -56,6 +56,75 @@ pub fn compile(raw: &str) -> Intent {
     compile_with_aliases(raw, &[])
 }
 
+/// The query as typed, with only personal vocabulary expanded: no filters,
+/// dates or sorts are read into it. Used when the interpreted query matches
+/// nothing (see `SearchDispatcher::search_response_with_snippets`).
+pub fn literal_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Intent {
+    let (mut work, quoted) = mask_quoted(raw);
+    let mut appends = Vec::new();
+    let mut chips = Vec::new();
+    expand_aliases(&mut work, aliases, &mut appends, &mut chips);
+    if chips.is_empty() {
+        return Intent {
+            query: raw.to_string(),
+            sort: None,
+            chips,
+        };
+    }
+    let mut query = unmask_quoted(&work, &quoted)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for token in appends {
+        if !query.is_empty() {
+            query.push(' ');
+        }
+        query.push_str(&token);
+    }
+    Intent {
+        query,
+        sort: None,
+        chips,
+    }
+}
+
+/// Replaces each complete `"..."` span with a placeholder so no rule can
+/// read quoted words as a filter, a date or a sort. Returns the masked text
+/// and the spans, in order, for [`unmask_quoted`].
+fn mask_quoted(text: &str) -> (String, Vec<String>) {
+    let Ok(re) = Regex::new(r#""[^"]*""#) else {
+        return (text.to_string(), Vec::new());
+    };
+    let mut spans = Vec::new();
+    let masked = re
+        .replace_all(text, |c: &regex::Captures| {
+            spans.push(c[0].to_string());
+            format!("{QUOTE_MARK}{}{QUOTE_MARK}", spans.len() - 1)
+        })
+        .into_owned();
+    (masked, spans)
+}
+
+fn unmask_quoted(text: &str, spans: &[String]) -> String {
+    if spans.is_empty() {
+        return text.to_string();
+    }
+    let Ok(re) = Regex::new(&format!("{QUOTE_MARK}(\\d+){QUOTE_MARK}")) else {
+        return text.to_string();
+    };
+    re.replace_all(text, |c: &regex::Captures| {
+        c[1].parse::<usize>()
+            .ok()
+            .and_then(|i| spans.get(i).cloned())
+            .unwrap_or_default()
+    })
+    .into_owned()
+}
+
+/// Private-use character around quoted-span placeholders: not a word
+/// character, so no `\b...\b` rule can match across it.
+const QUOTE_MARK: char = '\u{E000}';
+
 /// Compiles natural language, expanding personal vocabulary aliases into an
 /// OR-regex term (e.g. `resume` → `re:"(?i)(resume|cv)"`).
 pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Intent {
@@ -65,54 +134,13 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
         .split_whitespace()
         .any(|t| t.contains(':') && !t.starts_with("http") && !t.starts_with("https"));
 
-    let mut work = raw.to_string();
+    // Quoted words are meant literally ("журнал" учёта, "last week" notes).
+    let (mut work, quoted) = mask_quoted(raw);
     let mut appends: Vec<String> = Vec::new();
     let mut chips: Vec<InterpretationChip> = Vec::new();
     let mut sort: Option<String> = None;
 
     if !has_explicit_filter {
-        // --- Sort words -------------------------------------------------
-        for (pat, order, label) in [
-            (r"(?i)\b(?:latest|newest|most recent)\b", "newest", "Newest"),
-            (r"(?i)\boldest\b", "oldest", "Oldest"),
-            (r"(?i)\b(?:biggest|largest)\b", "largest", "Largest"),
-            // Russian. Sort words go first so "самые большие" is a sort,
-            // not the plain "большие" size filter below.
-            (
-                r"(?i)\b(?:последн(?:ий|яя|ее|ие|юю|его|ей|их)|свеж(?:ий|ая|ее|ие|ую|их)|новейш\w*|самы[йеях]\w*\s+нов\w*)\b",
-                "newest",
-                "Newest",
-            ),
-            (
-                r"(?i)\b(?:старейш\w*|самы[йеях]\w*\s+стар\w*)\b",
-                "oldest",
-                "Oldest",
-            ),
-            (
-                r"(?i)\b(?:крупнейш\w*|самы[йеях]\w*\s+(?:больш|крупн|тяж[её]л)\w*)\b",
-                "largest",
-                "Largest",
-            ),
-        ] {
-            if sort.is_none()
-                && let Ok(re) = Regex::new(pat)
-                && re.is_match(&work)
-            {
-                let source = re
-                    .find(&work)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                work = re.replace(&work, " ").to_string();
-                sort = Some(order.to_string());
-                chips.push(InterpretationChip {
-                    kind: "sort".to_string(),
-                    label: format!("Sort: {}", label),
-                    raw: format!("sort:{}", order),
-                    source,
-                });
-            }
-        }
-
         // --- Time windows ----------------------------------------------
         for (pat, filter, label) in [
             (r"(?i)\btoday\b", "modified:<1d", "Modified: today"),
@@ -153,17 +181,17 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 "Modified: yesterday",
             ),
             (
-                r"(?i)\b(?:(?:за|на|в)\s+)?(?:(?:эт(?:ой|у|а)|прошл(?:ой|ую|ая)|последн(?:юю|ей|яя))\s+)?недел[еюия]\b",
+                r"(?i)\b(?:за\s+(?:(?:эту|прошлую|последнюю)\s+)?неделю|(?:на|в)\s+(?:(?:этой|прошлой|последней)\s+)?неделе|(?:эта|прошлая|последняя)\s+неделя)\b",
                 "modified:<7d",
                 "Modified: last 7 days",
             ),
             (
-                r"(?i)\b(?:(?:за|в)\s+)?(?:(?:это[тм]|прошл(?:ый|ом)|последн(?:ий|ем))\s+)?месяц[еа]?\b",
+                r"(?i)\b(?:за\s+(?:(?:этот|прошлый|последний)\s+)?месяц|(?:в|на)\s+(?:этом|прошлом|последнем)\s+месяце|(?:этот|прошлый|последний)\s+месяц)\b",
                 "modified:<30d",
                 "Modified: last 30 days",
             ),
             (
-                r"(?i)\b(?:(?:за|в)\s+)?(?:это[тм]|прошл(?:ый|ом)|последн(?:ий|ем))\s+год[уа]?\b",
+                r"(?i)\b(?:за\s+(?:(?:этот|прошлый|последний)\s+)?год|(?:в|на)\s+(?:этом|прошлом|последнем)\s+году|(?:этот|прошлый|последний)\s+год)\b",
                 "modified:<365d",
                 "Modified: last year",
             ),
@@ -214,7 +242,16 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 let weekday_today = chrono_weekday_today();
                 if let Some(back) = days_fn(arg, weekday_today) {
                     let filter = format!("modified:{}d..{}d", back, back + 1);
-                    let shown = format!("{} {}", label, arg);
+                    // One English label whatever the query language; the UI
+                    // translates it ("Modified: last Friday", "... 3 days ago").
+                    let shown = if label == "Modified: last" {
+                        let day = weekday_index(arg)
+                            .map(|i| WEEKDAY_NAMES[i as usize])
+                            .unwrap_or(arg);
+                        format!("Modified: last {day}")
+                    } else {
+                        format!("Modified: {back} days ago")
+                    };
                     work = work.replacen(&whole, " ", 1);
                     appends.push(filter.clone());
                     chips.push(InterpretationChip {
@@ -224,6 +261,49 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                         source: whole,
                     });
                 }
+            }
+        }
+
+        // --- Sort words -------------------------------------------------
+        // After the dates: "за последнюю неделю" is a window, not "newest".
+        // Before sizes: "самые большие" is a sort, not the "большие" filter.
+        for (pat, order, label) in [
+            (r"(?i)\b(?:latest|newest|most recent)\b", "newest", "Newest"),
+            (r"(?i)\boldest\b", "oldest", "Oldest"),
+            (r"(?i)\b(?:biggest|largest)\b", "largest", "Largest"),
+            // Russian.
+            (
+                r"(?i)\b(?:последн(?:ий|яя|ее|ие|юю|его|ей|их)|свеж(?:ий|ая|ее|ие|ую|их)|новейш\w*|самы[йеях]\w*\s+нов\w*)\b",
+                "newest",
+                "Newest",
+            ),
+            (
+                r"(?i)\b(?:старейш\w*|самы[йеях]\w*\s+стар\w*)\b",
+                "oldest",
+                "Oldest",
+            ),
+            (
+                r"(?i)\b(?:крупнейш\w*|самы[йеях]\w*\s+(?:больш|крупн|тяж[её]л)\w*)\b",
+                "largest",
+                "Largest",
+            ),
+        ] {
+            if sort.is_none()
+                && let Ok(re) = Regex::new(pat)
+                && re.is_match(&work)
+            {
+                let source = re
+                    .find(&work)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                work = re.replace(&work, " ").to_string();
+                sort = Some(order.to_string());
+                chips.push(InterpretationChip {
+                    kind: "sort".to_string(),
+                    label: format!("Sort: {}", label),
+                    raw: format!("sort:{}", order),
+                    source,
+                });
             }
         }
 
@@ -270,12 +350,12 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
             ),
             (r"(?i)\b(?:tiny|small)\b", "size:<1mb", "Size: under 1 MB"),
             (
-                r"(?i)\b(?:огромн\w*|больш(?:ой|ая|ое|ие|их|ую)|тяж[её]л\w*)\b",
+                r"(?i)\b(?:огромн(?:ые|ых)|больш(?:ие|их)|тяж[её]л(?:ые|ых))\b",
                 "size:>100mb",
                 "Size: over 100 MB",
             ),
             (
-                r"(?i)\b(?:маленьк\w*|мелк\w*|крошечн\w*)\b",
+                r"(?i)\b(?:маленьк(?:ие|их)|мелк(?:ие|их)|крошечн(?:ые|ых))\b",
                 "size:<1mb",
                 "Size: under 1 MB",
             ),
@@ -362,51 +442,57 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
                 "Type: archives",
             ),
             (r"(?i)\blogs?\b", "ext:log", "Type: logs"),
-            // Russian (word stems cover the case endings).
+            // Russian. Explicit word forms, not stems: "документация",
+            // "журнал учёта", "архивное", "каталог товаров" or "фотошоп" are
+            // content words, not requests for a file type.
             (
-                r"(?i)\b(?:скриншот\w*|скрин(?:ы|ов|ах)?|снимк\w*|снимок|картинк\w*|изображени[еяйю]\w*|фото\w*)\b",
+                r"(?i)\b(?:скриншот(?:ы|а|ов|ах|ами)?|скрин(?:ы|ов|ах)?|снимок|снимк(?:и|ов|ах)|картинк(?:а|и|у|ах|ами)|картинок|изображени(?:е|я|й|ях)|фото|фотк(?:а|и|у)|фоток|фотографи(?:я|и|ю|ях)|фотографий)\b",
                 "type:image",
                 "Type: images",
             ),
             (r"(?i)\bпдф\w*\b", "ext:pdf", "Type: PDF"),
             (
-                r"(?i)\b(?:видео\w*|ролик\w*|фильм\w*)\b",
+                r"(?i)\b(?:видео|видеозапис(?:ь|и|ей)|ролик(?:и|ов)?|фильм(?:ы|ов)?)\b",
                 "type:media",
                 "Type: media",
             ),
             (
-                r"(?i)\b(?:аудио\w*|музык\w*|песн\w*|песен)\b",
+                r"(?i)\b(?:аудио|аудиозапис(?:ь|и|ей)|музык(?:а|у|и)|песн(?:я|и|ю)|песен)\b",
                 "type:media",
                 "Type: media",
             ),
             (
-                r"(?i)\b(?:исходник\w*|исходн(?:ый|ого|ом)\s+код\w*)\b",
+                r"(?i)\b(?:исходник(?:и|ов)?|исходн(?:ый|ого|ом)\s+код)\b",
                 "type:code",
                 "Type: code",
             ),
             (
-                r"(?i)\b(?:документ\w*|доки|доков)\b",
+                r"(?i)\b(?:документы|документов|документах|доки|доков)\b",
                 "type:doc",
                 "Type: documents",
             ),
             (
-                r"(?i)\b(?:таблиц\w*|эксел\w*|ексел\w*)\b",
+                r"(?i)\b(?:таблиц(?:а|ы|у|ах)?|эксел(?:ь|е|я|ьки|ек)|ексел(?:ь|е|я))\b",
                 "type:sheet",
                 "Type: spreadsheets",
             ),
             (
-                r"(?i)\b(?:презентаци\w*|презент\w*|слайд\w*)\b",
+                r"(?i)\b(?:презентаци(?:я|и|ю|ях)|презентаций|слайд(?:ы|ов)?)\b",
                 "type:presentation",
                 "Type: presentations",
             ),
             (
-                r"(?i)\b(?:папк[аиуе]|папок|каталог\w*|директори\w*)\b",
+                r"(?i)\b(?:папки|папок|директории|директорий)\b",
                 "type:dir",
                 "Type: folders",
             ),
-            (r"(?i)\bархив\w*\b", "type:archive", "Type: archives"),
             (
-                r"(?i)\b(?:лог(?:и|ов|ах)?|журнал(?:ы|ов)?)\b",
+                r"(?i)\b(?:архивы|архивов|архивах)\b",
+                "type:archive",
+                "Type: archives",
+            ),
+            (
+                r"(?i)\b(?:лог(?:и|ов|ах)?|лог-файл(?:ы|ов)?)\b",
                 "ext:log",
                 "Type: logs",
             ),
@@ -428,40 +514,7 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
         if let Ok(re) = Regex::new(
             r"(?i)\bin\s+(?:my\s+)?(projects|downloads|documents|desktop|pictures|videos|music|work)\b",
         ) {
-            // --- Personal vocabulary ----------------------------------
-            for (term, expansions) in aliases {
-                let term = term.trim();
-                if term.is_empty() {
-                    continue;
-                }
-                let Ok(re) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(term))) else {
-                    continue;
-                };
-                if !re.is_match(&work) {
-                    continue;
-                }
-                let mut words = vec![term.to_lowercase()];
-                for exp in expansions {
-                    let exp = exp.trim().to_lowercase();
-                    if !exp.is_empty() && !words.contains(&exp) {
-                        words.push(exp);
-                    }
-                }
-                let alternation = words
-                    .iter()
-                    .map(|w| regex::escape(w))
-                    .collect::<Vec<_>>()
-                    .join("|");
-                let raw = format!("re:\"(?i)({})\"", alternation);
-                work = re.replace(&work, " ").to_string();
-                appends.push(raw.clone());
-                chips.push(InterpretationChip {
-                    kind: "alias".to_string(),
-                    label: format!("Alias: {}", term),
-                    raw,
-                    source: term.to_string(),
-                });
-            }
+            expand_aliases(&mut work, aliases, &mut appends, &mut chips);
             // Russian names of the standard folders. On a Russian Windows the
             // folders on disk are still "Downloads", "Documents"... (only the
             // shell shows translated names), so they map to those names.
@@ -527,6 +580,7 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
         work = re.replace_all(&work, " ").to_string();
     }
 
+    let work = unmask_quoted(&work, &quoted);
     let mut query = work.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut seen = HashSet::new();
     for token in appends {
@@ -543,6 +597,50 @@ pub fn compile_with_aliases(raw: &str, aliases: &[(String, Vec<String>)]) -> Int
     }
 
     Intent { query, sort, chips }
+}
+
+/// Expands personal vocabulary: `term` becomes an OR-regex of the term and
+/// its expansions, with a removable chip.
+fn expand_aliases(
+    work: &mut String,
+    aliases: &[(String, Vec<String>)],
+    appends: &mut Vec<String>,
+    chips: &mut Vec<InterpretationChip>,
+) {
+    for (term, expansions) in aliases {
+        let term = term.trim();
+        if term.is_empty() {
+            continue;
+        }
+        let Ok(re) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(term))) else {
+            continue;
+        };
+        if !re.is_match(work.as_str()) {
+            continue;
+        }
+        let mut words = vec![term.to_lowercase()];
+        for exp in expansions {
+            let exp = exp.trim().to_lowercase();
+            if !exp.is_empty() && !words.contains(&exp) {
+                words.push(exp);
+            }
+        }
+        let alternation = words
+            .iter()
+            .map(|w| regex::escape(w))
+            .collect::<Vec<_>>()
+            .join("|");
+        let raw = format!("re:\"(?i)({})\"", alternation);
+        let rest = re.replace(work.as_str(), " ").into_owned();
+        *work = rest;
+        appends.push(raw.clone());
+        chips.push(InterpretationChip {
+            kind: "alias".to_string(),
+            label: format!("Alias: {}", term),
+            raw,
+            source: term.to_string(),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -646,6 +744,95 @@ mod tests {
     }
 
     #[test]
+    fn russian_content_words_are_not_filters() {
+        for query in [
+            "журнал учёта",
+            "документация kaspersky",
+            "архивное дело",
+            "каталог товаров",
+            "фотошоп уроки",
+            "фильмография",
+            "презент на день рождения",
+            "план на месяц",
+            "рабочая неделя",
+            "Большой театр",
+            "мелкий ремонт",
+        ] {
+            let intent = compile(query);
+            assert!(
+                intent.chips.iter().all(|c| c.kind == "sort"),
+                "{query:?} -> {:?}",
+                intent.chips
+            );
+        }
+    }
+
+    #[test]
+    fn russian_time_window_is_not_a_sort() {
+        let intent = compile("отчёт за последнюю неделю");
+        assert!(intent.sort.is_none(), "{:?}", intent.sort);
+        assert!(intent.query.contains("modified:<7d"), "{}", intent.query);
+        assert!(intent.query.starts_with("отчёт"), "{}", intent.query);
+        let intent = compile("акты на прошлой неделе");
+        assert!(intent.query.contains("modified:<7d"), "{}", intent.query);
+        let intent = compile("счета за этот месяц");
+        assert!(intent.query.contains("modified:<30d"), "{}", intent.query);
+    }
+
+    #[test]
+    fn quoted_words_are_never_interpreted() {
+        let intent = compile("\"last week\" notes");
+        assert!(intent.chips.is_empty());
+        assert_eq!(intent.query, "\"last week\" notes");
+
+        let intent = compile("screenshots \"today\"");
+        assert!(intent.chips.iter().any(|c| c.raw == "type:image"));
+        assert!(!intent.query.contains("modified:"), "{}", intent.query);
+        assert!(intent.query.contains("\"today\""), "{}", intent.query);
+
+        let intent = compile("\"журнал\" логи");
+        assert!(intent.query.contains("\"журнал\""), "{}", intent.query);
+        assert!(intent.query.contains("ext:log"), "{}", intent.query);
+    }
+
+    #[test]
+    fn literal_mode_keeps_words_and_aliases_only() {
+        let aliases = vec![("resume".to_string(), vec!["cv".to_string()])];
+        let intent = literal_with_aliases("latest resume screenshots", &aliases);
+        assert!(intent.sort.is_none());
+        assert!(intent.chips.iter().all(|c| c.kind == "alias"));
+        assert!(intent.query.contains("latest"), "{}", intent.query);
+        assert!(intent.query.contains("screenshots"), "{}", intent.query);
+        assert!(
+            intent.query.contains("re:\"(?i)(resume|cv)\""),
+            "{}",
+            intent.query
+        );
+
+        let intent = literal_with_aliases("журнал учёта", &[]);
+        assert!(intent.chips.is_empty());
+        assert_eq!(intent.query, "журнал учёта");
+    }
+
+    #[test]
+    fn time_chips_have_english_labels_for_any_query_language() {
+        let ru = compile("акт в прошлую пятницу");
+        let en = compile("invoice from last friday");
+        let label = |i: &Intent| {
+            i.chips
+                .iter()
+                .find(|c| c.kind == "time")
+                .map(|c| c.label.clone())
+        };
+        assert_eq!(label(&ru).as_deref(), Some("Modified: last Friday"));
+        assert_eq!(label(&en), label(&ru));
+        assert_eq!(
+            label(&compile("счёт 3 дня назад")).as_deref(),
+            Some("Modified: 3 days ago")
+        );
+    }
+
+    #[test]
     fn plain_query_is_untouched() {
         let intent = compile("docker error");
         assert!(intent.chips.is_empty());
@@ -667,8 +854,26 @@ fn chrono_weekday_today() -> u32 {
 
 /// Days back from today to the most recent given weekday, never today itself.
 fn weekday_days_back(name: &str, today: u32) -> Option<u32> {
+    let target = weekday_index(name)?;
+    let back = (today + 7 - target) % 7;
+    Some(if back == 0 { 7 } else { back })
+}
+
+/// English day names, indexed 0=Monday..6=Sunday (chip labels).
+const WEEKDAY_NAMES: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+
+/// 0=Monday..6=Sunday for an English or Russian day name as typed.
+fn weekday_index(name: &str) -> Option<u32> {
     let lower = name.to_lowercase();
-    let target = match lower.as_str() {
+    Some(match lower.as_str() {
         "понедельник" => 0,
         "вторник" => 1,
         "среда" | "среду" => 2,
@@ -684,9 +889,7 @@ fn weekday_days_back(name: &str, today: u32) -> Option<u32> {
         "saturday" => 5,
         "sunday" => 6,
         _ => return None,
-    };
-    let back = (today + 7 - target) % 7;
-    Some(if back == 0 { 7 } else { back })
+    })
 }
 
 /// Size unit as the query grammar spells it (`мб` → `mb`).
@@ -742,6 +945,11 @@ mod time_travel_tests {
     #[test]
     fn days_ago_phrase_becomes_a_time_filter_chip() {
         let intent = compile("notes 3 days ago");
-        assert!(intent.chips.iter().any(|c| c.kind == "time" && c.raw.contains("..")));
+        assert!(
+            intent
+                .chips
+                .iter()
+                .any(|c| c.kind == "time" && c.raw.contains(".."))
+        );
     }
 }

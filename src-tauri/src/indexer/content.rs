@@ -304,6 +304,9 @@ pub struct ContentIndex {
     pub ext_field: Option<Field>,
     /// File size in bytes for range pushdown. `None` on a legacy handle.
     pub size_field: Option<Field>,
+    /// Inflected Russian word forms as written (filename and content), for
+    /// regex queries: the main fields hold stems. `None` on a legacy handle.
+    pub word_forms_field: Option<Field>,
     /// True when this construction migrated an older schema and the caller
     /// must force a full content re-extraction.
     pub rebuilt: bool,
@@ -365,7 +368,10 @@ pub const MAX_REGEX_PATTERN_LEN: usize = 1024;
 /// v2: K15 schema (CJK-aware "kensaku" tokenizer on filename and content)
 /// v3: ext/size fields for filter pushdown (K12/B4)
 /// v4: Russian morphology (Snowball stems for Cyrillic tokens)
-pub const CONTENT_SCHEMA_VERSION: u32 = 4;
+/// v5: `word_forms` side field so regex queries see inflected Russian words
+pub const CONTENT_SCHEMA_VERSION: u32 = 5;
+/// Tokenizer name of the `word_forms` field.
+const WORD_FORMS_TOKENIZER: &str = "kensaku_word_forms";
 pub const SCHEMA_MARKER_FILE: &str = "content.schema";
 
 impl ContentIndex {
@@ -396,6 +402,15 @@ impl ContentIndex {
         // filters can narrow the Tantivy query before top-k collection.
         let ext_field = schema_builder.add_text_field("ext", STRING);
         let size_field = schema_builder.add_u64_field("size", FAST);
+        // Doc ids only: regex queries need no frequencies or positions.
+        let word_forms_field = schema_builder.add_text_field(
+            "word_forms",
+            TextOptions::default().set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer(WORD_FORMS_TOKENIZER)
+                    .set_index_option(IndexRecordOption::Basic),
+            ),
+        );
         let schema = schema_builder.build();
 
         let mut rebuilt = false;
@@ -412,7 +427,11 @@ impl ContentIndex {
                 .ok()
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(0);
-            let compatible = has_fields && has_pushdown && marker_version >= CONTENT_SCHEMA_VERSION;
+            let has_word_forms = existing_schema.get_field("word_forms").is_ok();
+            let compatible = has_fields
+                && has_pushdown
+                && has_word_forms
+                && marker_version >= CONTENT_SCHEMA_VERSION;
             if compatible {
                 existing
             } else {
@@ -424,6 +443,8 @@ impl ContentIndex {
                     "K12 filter pushdown migration (schema v2 -> v3)"
                 } else if marker_version < 4 {
                     "Russian morphology migration (schema v3 -> v4)"
+                } else if !has_word_forms || marker_version < 5 {
+                    "Regex over Russian word forms (schema v4 -> v5)"
                 } else {
                     "Content schema marker is stale"
                 };
@@ -462,6 +483,10 @@ impl ContentIndex {
             .tokenizers()
             .register("kensaku", crate::indexer::tokenizer::kensaku_analyzer());
         index.tokenizers().register(
+            WORD_FORMS_TOKENIZER,
+            crate::indexer::tokenizer::kensaku_surface_analyzer(),
+        );
+        index.tokenizers().register(
             "trigram",
             NgramTokenizer::new(3, 3, false).map_err(|e| e.to_string())?,
         );
@@ -492,6 +517,7 @@ impl ContentIndex {
             modified_field,
             ext_field: Some(ext_field),
             size_field: Some(size_field),
+            word_forms_field: Some(word_forms_field),
             rebuilt,
             rebuild_reason,
             snippet_cache: Mutex::new(SnippetCache::new(32)),
@@ -523,6 +549,7 @@ impl ContentIndex {
         let content_raw_field = schema.get_field("content_raw").ok();
         let ext_field = schema.get_field("ext").ok();
         let size_field = schema.get_field("size").ok();
+        let word_forms_field = schema.get_field("word_forms").ok();
         let modified_field = schema
             .get_field("modified")
             .map_err(|e| format!("Content index is missing the 'modified' field: {}", e))?;
@@ -531,6 +558,10 @@ impl ContentIndex {
         index
             .tokenizers()
             .register("kensaku", crate::indexer::tokenizer::kensaku_analyzer());
+        index.tokenizers().register(
+            WORD_FORMS_TOKENIZER,
+            crate::indexer::tokenizer::kensaku_surface_analyzer(),
+        );
         index.tokenizers().register(
             "trigram",
             NgramTokenizer::new(3, 3, false).map_err(|e| e.to_string())?,
@@ -554,6 +585,7 @@ impl ContentIndex {
             modified_field,
             ext_field,
             size_field,
+            word_forms_field,
             rebuilt: false,
             rebuild_reason: None,
             snippet_cache: Mutex::new(SnippetCache::new(32)),
@@ -628,6 +660,10 @@ impl ContentIndex {
         }
         if let Some(field) = self.size_field {
             doc.add_u64(field, size);
+        }
+        if let Some(field) = self.word_forms_field {
+            doc.add_text(field, filename);
+            doc.add_text(field, content);
         }
         writer.add_document(doc).map_err(|e| e.to_string())?;
         Ok(())
@@ -822,7 +858,12 @@ impl ContentIndex {
 
             let mut field_queries: Vec<RegexQuery> = Vec::new();
             let mut failed = false;
-            for field in [self.content_field, self.filename_field] {
+            // `word_forms` holds Russian words as written; the main fields
+            // hold their stems, which an inflected-form pattern cannot match.
+            let fields = [self.content_field, self.filename_field]
+                .into_iter()
+                .chain(self.word_forms_field);
+            for field in fields {
                 match RegexQuery::from_pattern(pattern, field) {
                     Ok(query) => field_queries.push(query),
                     Err(err) => {
@@ -2053,6 +2094,34 @@ mod tests {
         assert_eq!(hits[0].filename, "заметки.txt");
         // English is untouched by the Russian stemmer.
         assert_eq!(index.search("kaspersky endpoint", 10, None).len(), 1);
+
+        // Regex sees words as written, not only their stems.
+        for pattern in [
+            "договору",
+            "лицензи(й|я)",
+            "сч[её]т",
+            "поставк.*",
+            "kaspersky",
+        ] {
+            let hits = index
+                .search_groups_with_regex(&[], &[pattern], 10, None)
+                .matches;
+            assert_eq!(hits.len(), 1, "regex {pattern:?}");
+            assert_eq!(hits[0].filename, "Договор поставки Касперский.docx");
+        }
+        // A form that is not in the text does not match by regex (regex is
+        // literal; word-form matching is what plain queries are for).
+        assert!(
+            index
+                .search_groups_with_regex(&[], &["договорами"], 10, None)
+                .matches
+                .is_empty()
+        );
+        // Filename forms are covered too.
+        let hits = index
+            .search_groups_with_regex(&[], &["касперский"], 10, None)
+            .matches;
+        assert_eq!(hits.len(), 1);
 
         // The snippet lands on the inflected word.
         let text = "Стороны заключили договор о поставке лицензий.";

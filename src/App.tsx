@@ -33,6 +33,7 @@ import { VirtualGrid } from "./components/VirtualGrid";
 import { FileRow } from "./components/FileRow";
 import { normalizeTheme } from "./hooks/useTheme";
 import { setLanguageSetting, t, useLanguage } from "./i18n";
+import { chipLabel } from "./lib/chipLabel";
 import { PreviewDialog } from "./components/PreviewDialog";
 import { classify } from "./lib/categories";
 import { inFilter } from "./lib/query";
@@ -94,6 +95,7 @@ function App() {
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
   const [hints, setHints] = useState<string[]>([]);
   const [interpretation, setInterpretation] = useState<InterpretationChip[]>([]);
+  const [literalFallback, setLiteralFallback] = useState(false);
   const [facets, setFacets] = useState<Facets | undefined>(undefined);
   const [home, setHome] = useState<HomeData | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -282,6 +284,7 @@ function App() {
       setActiveFilters([]);
       setHints([]);
       setInterpretation([]);
+      setLiteralFallback(false);
       setFacets(undefined);
       setSelectedIndex(0);
       return;
@@ -292,6 +295,7 @@ function App() {
       setActiveFilters([]);
       setHints([]);
       setInterpretation([]);
+      setLiteralFallback(false);
       setFacets(undefined);
       return;
     }
@@ -331,6 +335,7 @@ function App() {
           setActiveFilters(res.active_filters);
           setHints(res.hints);
           setInterpretation(res.interpretation ?? []);
+          setLiteralFallback(!!res.literal_fallback);
           setFacets(res.facets);
           setSelectedIndex(0);
 
@@ -1064,15 +1069,23 @@ function App() {
 
               {!isCommandMode && interpretation.length > 0 && (
                 <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3.5 pb-1.5">
-                  <span className="t-meta mr-1 text-subtle">{t("Understood as")}</span>
-                  {interpretation.map((c, i) => (
+                  {literalFallback ? (
+                    <span className="t-meta mr-1 text-subtle">
+                      {t("Nothing matched these filters, showing results for the words as typed")}
+                    </span>
+                  ) : (
+                    <span className="t-meta mr-1 text-subtle">{t("Understood as")}</span>
+                  )}
+                  {!literalFallback && interpretation.map((c, i) => (
                     <button
                       key={`${c.raw}-${i}`}
                       type="button"
-                      title={t("Remove “{text}”", { text: c.source })}
+                      title={t("Search “{text}” as words, not as a filter", { text: c.source })}
+                      // Dismissing a reading keeps the words: quoted, they are
+                      // searched as typed and never read as a filter again.
                       onClick={() =>
                         setQuery((prev) =>
-                          prev.replace(c.source, "").replace(/\s+/g, " ").trim(),
+                          prev.replace(c.source, `"${c.source}"`).replace(/\s+/g, " ").trim(),
                         )
                       }
                       className="group flex h-6 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 text-[12px] text-fg shadow-[inset_0_0_0_1px_var(--border)] transition-colors hover:text-danger"
@@ -1315,25 +1328,6 @@ function SuggestChip({ label, onClick }: { label: string; onClick: () => void })
       {label}
     </button>
   );
-}
-
-/* Interpretation chips arrive with English labels from the backend
-   ("Modified: last 7 days", "Size: under 5MB"); show them in the UI language. */
-function chipLabel(c: { kind: string; label: string; raw: string }): string {
-  const m =
-    c.label.match(/^Size: (under|over) (.+)$/) ??
-    c.label.match(/^(In|Alias): (.+)$/) ??
-    c.label.match(/^Modified: (last|days ago) (.+)$/);
-  if (m) {
-    const [, kind, value] = m;
-    if (kind === "under") return t("Size: under {v}", { v: value });
-    if (kind === "over") return t("Size: over {v}", { v: value });
-    if (kind === "In") return t("In: {v}", { v: value });
-    if (kind === "Alias") return t("Alias: {v}", { v: value });
-    if (kind === "days ago") return t("Modified: {v} days ago", { v: value });
-    return t("Modified: last {v}", { v: t(value.toLowerCase()) });
-  }
-  return t(c.label);
 }
 
 function hasActiveFilters(q: string): boolean {

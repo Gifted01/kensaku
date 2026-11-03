@@ -33,6 +33,21 @@ versioning: [SemVer](https://semver.org/).
   an English Windows) as `?`; such paths now use 8.3 short names or stdin.
 - PP-OCRv6 was documented as reading Cyrillic; its dictionary has none.
 - Model checksums are streamed instead of reading the whole file into memory.
+- Interpretation chips in the Russian interface showed half-translated
+  labels (`Изменён: 7 days (последний)`). Time chips now carry one English
+  label whatever the query language (`Modified: last Friday`,
+  `Modified: 3 days ago`) and the UI translates whole labels first.
+- Regex queries (`re:`, MCP `regex_search`) missed inflected Russian words:
+  the main fields hold stems. A small `word_forms` side field keeps the
+  forms as written; content schema v5 rebuilds the index once.
+- Natural-language reading turned ordinary words into filters
+  (`журнал учёта`, `документация`, `план на месяц`, `Большой театр`), and a
+  filter that matched nothing hid the files the words alone would find.
+  Russian rules now use explicit word forms; dates are read before sort
+  words (`за последнюю неделю` is a window, not "newest"); quoted words are
+  never interpreted (`"last week" notes`); when the interpreted query finds
+  nothing, the words as typed are searched instead, with a note. Dismissing
+  a chip keeps its words, quoted, instead of deleting them.
 
 ## [1.0.12] — 2026-11-03
 
