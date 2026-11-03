@@ -47,6 +47,8 @@ enum Normalizer {
     },
     /// Regex ` {2,}` → `to`: every run of two or more spaces.
     CollapseSpaces(String),
+    /// Any other `Replace` regex (e.g. `\s+` in potion-multilingual-128M).
+    RegexReplace(regex::Regex, String),
     Prepend(String),
     Bert {
         clean_text: bool,
@@ -224,6 +226,7 @@ impl HfTokenizer {
                         s.replace(from.as_str(), to)
                     }
                 }
+                Normalizer::RegexReplace(re, to) => re.replace_all(&s, to.as_str()).into_owned(),
                 Normalizer::CollapseSpaces(to) => {
                     let mut out = String::with_capacity(s.len());
                     let mut run = 0usize;
@@ -619,22 +622,23 @@ fn parse_normalizer(v: &Value, out: &mut Vec<Normalizer>) -> Option<()> {
         }),
         "Replace" => {
             let pattern = v.get("pattern")?;
-            // Only literal string patterns; the common `" {2,}" -> "▁"` regex
-            // from SentencePiece is covered by collapsing runs of spaces.
             if let Some(s) = pattern.get("String").and_then(Value::as_str) {
                 out.push(Normalizer::Replace {
                     from: s.to_string(),
                     to: v.get("content")?.as_str()?.to_string(),
                 });
             } else {
-                // Any other regex is unsupported: reject the tokenizer.
                 let r = pattern.get("Regex").and_then(Value::as_str)?;
-                if r != " {2,}" {
-                    return None;
+                let to = v.get("content")?.as_str()?.to_string();
+                if r == " {2,}" {
+                    out.push(Normalizer::CollapseSpaces(to));
+                } else {
+                    // tokenizers uses Oniguruma; the simple patterns found in
+                    // real files (`\s+`, character classes) mean the same in
+                    // the `regex` crate. Anything it cannot compile rejects
+                    // the tokenizer rather than tokenizing differently.
+                    out.push(Normalizer::RegexReplace(regex::Regex::new(r).ok()?, to));
                 }
-                out.push(Normalizer::CollapseSpaces(
-                    v.get("content")?.as_str()?.to_string(),
-                ));
             }
         }
         "Prepend" => out.push(Normalizer::Prepend(v.get("prepend")?.as_str()?.to_string())),
@@ -922,6 +926,14 @@ mod parity_tests {
         check(
             include_str!("testdata/unigram_metaspace.json"),
             include_str!("testdata/unigram_metaspace_cases.json"),
+        );
+    }
+
+    #[test]
+    fn xlmr_whitespace_regex_matches_reference() {
+        check(
+            include_str!("testdata/unigram_regex_ws.json"),
+            include_str!("testdata/unigram_regex_ws_cases.json"),
         );
     }
 

@@ -484,9 +484,19 @@ fn check_inotify_limit() -> DoctorCheck {
 fn check_models() -> DoctorCheck {
     const ID: &str = "models";
     const LABEL: &str = "Model files";
-    const FIX: &str = "Download model files in AI & Semantic";
+    const FIX: &str = "Download model files in Settings → Meaning search";
 
-    let status = models::status();
+    // Check the model that is actually selected: with the multilingual
+    // table the English potion-base-8M files are not needed at all.
+    let multilingual = crate::config::KensakuConfig::load()
+        .semantic_model
+        .trim()
+        .eq_ignore_ascii_case("multilingual");
+    let status = if multilingual {
+        models::multilingual_status()
+    } else {
+        models::status()
+    };
     let present = status.artifacts.iter().filter(|a| a.present).count();
     let total = status.artifacts.len();
 
