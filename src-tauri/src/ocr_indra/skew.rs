@@ -3,7 +3,6 @@
 //! that levels the text rows.
 
 use super::imageops::{Gray, resize};
-use rayon::prelude::*;
 
 /// Degrees of tilt searched (quarter turns cover the rest).
 const DESKEW_MAX: f64 = 45.0;
@@ -20,7 +19,7 @@ pub fn rotate(gray: &Gray, degrees: f64, replicate: bool) -> Gray {
     let (wm, hm) = (gray.w as i64 - 1, gray.h as i64 - 1);
     let mut out = Gray::new(gray.w, gray.h, 0);
     out.data
-        .par_chunks_mut(gray.w)
+        .chunks_mut(gray.w)
         .enumerate()
         .for_each(|(y, row)| {
             let dy = y as f64 - cy;
@@ -68,8 +67,17 @@ fn row_sharpness(ink: &Gray, degrees: f64) -> f64 {
 }
 
 /// Best angle of `angles` (the first one on ties, like `max`).
+///
+/// Sequential on purpose. Deskew runs inside `Engine::read`, i.e. while the
+/// Indra engine mutex is held, on a thread of the extraction rayon pool. A
+/// `par_iter` here lets that thread steal another queued extraction while it
+/// waits; that job then blocks on the engine mutex this very thread holds, so
+/// the thread deadlocks with its extraction slot. Once every slot is stuck,
+/// each remaining file waits 30 s for a slot and is skipped: the crawl looked
+/// frozen at a random file count with 0% CPU. Images are still OCR'd in
+/// parallel across the pool, so nothing is lost by scoring angles in order.
 fn best(ink: &Gray, angles: &[f64]) -> f64 {
-    let scores: Vec<f64> = angles.par_iter().map(|&a| row_sharpness(ink, a)).collect();
+    let scores: Vec<f64> = angles.iter().map(|&a| row_sharpness(ink, a)).collect();
     let mut at = 0;
     for (i, &s) in scores.iter().enumerate() {
         if s > scores[at] {
@@ -96,7 +104,7 @@ pub fn estimate_skew(gray: &Gray) -> f64 {
     }
     let coarse = ink_thumb(gray, SIDE / 2);
     let grid = steps(-DESKEW_MAX, DESKEW_MAX, 2.0);
-    let scores: Vec<f64> = grid.par_iter().map(|&a| row_sharpness(&coarse, a)).collect();
+    let scores: Vec<f64> = grid.iter().map(|&a| row_sharpness(&coarse, a)).collect();
     let mut ranked: Vec<usize> = (0..grid.len()).collect();
     ranked.sort_by(|&a, &b| scores[a].total_cmp(&scores[b]));
     let mut starts = vec![0.0];
@@ -143,5 +151,51 @@ mod tests {
         let a = estimate_skew(&tilted);
         assert!((a + 7.0).abs() <= 0.3, "measured {a}");
         assert_eq!(estimate_skew(&Gray::new(100, 100, 255)), 0.0);
+    }
+}
+
+/// Regression test for the crawl freeze: OCR runs on the extraction rayon
+/// pool with the engine mutex held. If deskew used rayon, a worker waiting in
+/// a parallel iterator could steal another job that then waits for the mutex
+/// it holds. Same shape here: pool jobs lock one mutex and deskew a page.
+#[cfg(test)]
+mod pool_deadlock {
+    use super::*;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    fn striped_page() -> Gray {
+        let mut page = Gray::new(1200, 900, 255);
+        for (i, px) in page.data.iter_mut().enumerate() {
+            let (x, y) = (i % 1200, i / 1200);
+            if (y + x / 40) % 30 < 4 {
+                *px = 0;
+            }
+        }
+        page
+    }
+
+    /// Mirrors `pool::read`: several engines, each behind a mutex; a job
+    /// takes a free one if it can, otherwise waits for one.
+    #[test]
+    fn deskew_under_a_lock_on_the_extraction_pool_finishes() {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let engines: Arc<Vec<Mutex<()>>> = Arc::new((0..2).map(|_| Mutex::new(())).collect());
+        let page = Arc::new(striped_page());
+        let (tx, rx) = mpsc::channel();
+        let jobs = 48;
+        for job in 0..jobs {
+            let (engines, page, tx) = (Arc::clone(&engines), Arc::clone(&page), tx.clone());
+            pool.spawn(move || {
+                let _guard = (0..engines.len())
+                    .find_map(|i| engines[(job + i) % engines.len()].try_lock().ok())
+                    .unwrap_or_else(|| engines[job % engines.len()].lock().unwrap());
+                let _ = tx.send(estimate_skew(&page));
+            });
+        }
+        for done in 0..jobs {
+            rx.recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("deadlock: only {done} of {jobs} pages finished"));
+        }
     }
 }

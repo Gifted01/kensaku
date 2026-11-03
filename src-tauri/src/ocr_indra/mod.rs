@@ -198,6 +198,9 @@ mod pool {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         };
+        // Nothing under this lock may use rayon (see `skew::best`): a worker
+        // waiting inside a parallel iterator can pick up another extraction,
+        // which would then wait for this lock forever.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.read(page)));
         Some(result.unwrap_or_else(|_| Err("the engine panicked".into())))
     }
