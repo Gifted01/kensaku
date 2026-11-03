@@ -106,27 +106,29 @@ impl ModelRegistry {
                 let ml_dir = std::env::var_os("KENSAKU_MULTILINGUAL_MODEL_DIR")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| dir.join("multilingual"));
-                if let Some(table) = StaticTable::load_with_f32(&ml_dir, config.semantic_f32_table)
-                {
-                    let table = table.with_model_id(MULTILINGUAL_MODEL_ID);
-                    Self {
-                        provider: EmbeddingProviderKind::Static,
-                        model_id: MULTILINGUAL_MODEL_ID,
-                        name: "potion-multilingual-128M".to_string(),
-                        dim: table.dim,
-                        normalize: table.normalize,
-                        fallback_reason: None,
-                        table: Some(Arc::new(table)),
-                        smart: None,
+                match StaticTable::load_checked(&ml_dir, config.semantic_f32_table) {
+                    Ok(table) => {
+                        let table = table.with_model_id(MULTILINGUAL_MODEL_ID);
+                        Self {
+                            provider: EmbeddingProviderKind::Static,
+                            model_id: MULTILINGUAL_MODEL_ID,
+                            name: "potion-multilingual-128M".to_string(),
+                            dim: table.dim,
+                            normalize: table.normalize,
+                            fallback_reason: None,
+                            table: Some(Arc::new(table)),
+                            smart: None,
+                        }
                     }
-                } else {
-                    let mut reg =
-                        Self::load_with_f32(dir, config.semantic_f32_table).unwrap_or_default();
-                    reg.fallback_reason = Some(format!(
-                        "Multilingual model not found in {}; download it in Settings → Models",
-                        ml_dir.display()
-                    ));
-                    reg
+                    Err(reason) => {
+                        let mut reg = Self::load_with_f32(dir, config.semantic_f32_table)
+                            .unwrap_or_default();
+                        reg.fallback_reason = Some(format!(
+                            "Multilingual model in {} could not be loaded: {reason}",
+                            ml_dir.display()
+                        ));
+                        reg
+                    }
                 }
             }
             "static" | "potion" => {

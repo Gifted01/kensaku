@@ -23,6 +23,9 @@ use std::collections::HashMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
+/// Longest word (in characters) that is segmented; see [`HfTokenizer::encode`].
+const MAX_WORD_CHARS: usize = 256;
+
 /// Matches `tokenizers`' `K_UNK_PENALTY`.
 const UNK_PENALTY: f64 = 10.0;
 
@@ -141,6 +144,13 @@ impl HfTokenizer {
         let normalized = self.normalize(text);
         let mut ids = Vec::new();
         for word in self.pre_tokenize(&normalized) {
+            // A "word" can be a whole base64 blob or minified line. Segmenting
+            // it costs O(length × longest piece) for at most a few useful
+            // tokens, so only its start is used.
+            let word = match word.char_indices().nth(MAX_WORD_CHARS) {
+                Some((cut, _)) => &word[..cut],
+                None => word.as_str(),
+            };
             match &self.model {
                 Model::Unigram {
                     pieces,
@@ -148,7 +158,7 @@ impl HfTokenizer {
                     unk_id,
                     unk_score,
                 } => viterbi(
-                    &word,
+                    word,
                     pieces,
                     *max_piece_bytes,
                     *unk_id,
@@ -160,7 +170,7 @@ impl HfTokenizer {
                     unk_id,
                     prefix,
                     max_input_chars,
-                } => wordpiece(&word, vocab, *unk_id, prefix, *max_input_chars, &mut ids),
+                } => wordpiece(word, vocab, *unk_id, prefix, *max_input_chars, &mut ids),
             }
             if ids.len() >= max_tokens {
                 ids.truncate(max_tokens);
@@ -541,6 +551,49 @@ fn wordpiece(
         }
     }
     out.extend(pieces);
+}
+
+/// Short description of a tokenizer's parts, e.g.
+/// `normalizer Sequence[Precompiled, Replace(Regex), Strip]; pre_tokenizer
+/// Metaspace; model Unigram`, for error messages about unsupported files.
+pub fn describe(value: &Value) -> String {
+    fn part(v: &Value) -> String {
+        let Some(kind) = v.get("type").and_then(Value::as_str) else {
+            return "none".to_string();
+        };
+        let children = v
+            .get("normalizers")
+            .or_else(|| v.get("pretokenizers"))
+            .and_then(Value::as_array);
+        match (kind, children) {
+            (_, Some(list)) => format!(
+                "{kind}[{}]",
+                list.iter().map(part).collect::<Vec<_>>().join(", ")
+            ),
+            ("Replace", None) => {
+                let pattern = v
+                    .get("pattern")
+                    .and_then(|p| p.get("Regex").map(|r| format!("Regex {r}")))
+                    .unwrap_or_else(|| "String".to_string());
+                format!("Replace({pattern})")
+            }
+            ("Split", None) => format!(
+                "Split({})",
+                v.get("pattern").map(|p| p.to_string()).unwrap_or_default()
+            ),
+            _ => kind.to_string(),
+        }
+    }
+    let model = value
+        .get("model")
+        .and_then(|m| m.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    format!(
+        "normalizer {}; pre_tokenizer {}; model {model}",
+        value.get("normalizer").map(part).unwrap_or_else(|| "none".into()),
+        value.get("pre_tokenizer").map(part).unwrap_or_else(|| "none".into()),
+    )
 }
 
 fn parse_normalizer(v: &Value, out: &mut Vec<Normalizer>) -> Option<()> {

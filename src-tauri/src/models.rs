@@ -314,6 +314,20 @@ fn error_slot() -> &'static Mutex<Option<String>> {
     LAST_ERROR.get_or_init(|| Mutex::new(None))
 }
 
+fn active_dir_slot() -> &'static Mutex<Option<PathBuf>> {
+    static SLOT: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// True when the last started download was for `dir`.
+fn is_active_dir(dir: &Path) -> bool {
+    active_dir_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_deref()
+        .is_some_and(|active| active == dir)
+}
+
 fn set_progress(progress: Option<ModelProgress>) {
     let mut guard = match progress_slot().lock() {
         Ok(guard) => guard,
@@ -456,9 +470,9 @@ fn status_for(dir: &Path, artifacts_list: &[Artifact]) -> ModelsStatus {
     ModelsStatus {
         dir: dir.to_string_lossy().to_string(),
         ready,
-        downloading: DOWNLOADING.load(Ordering::Relaxed),
-        progress: current_progress(),
-        error: current_error(),
+        downloading: is_active_dir(&dir) && DOWNLOADING.load(Ordering::Relaxed),
+        progress: if is_active_dir(&dir) { current_progress() } else { None },
+        error: if is_active_dir(&dir) { current_error() } else { None },
         artifacts,
         total_bytes,
         total_present_bytes,
@@ -532,6 +546,9 @@ fn start_download(
     if DOWNLOADING.swap(true, Ordering::SeqCst) {
         return;
     }
+    // Progress and errors are shared by every pack; remember which pack they
+    // belong to, so one pack's failure is not shown on another pack's card.
+    *active_dir_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(dir.clone());
 
     if let Err(e) = ensure_dir(&dir) {
         set_error(Some(e));

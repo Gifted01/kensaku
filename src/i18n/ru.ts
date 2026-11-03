@@ -449,6 +449,7 @@ export const ru: Dictionary = {
   "terms within 5 words": "слова на расстоянии до 5 слов",
   "Tesseract (clean ASCII, separate install)": "Tesseract (чистый текст, ставится отдельно)",
   "tesseract not found or not runnable.": "tesseract не найден или не запускается.",
+  "The default semantic tier is built in. These files pre-fetch the optional neural tier for offline use.": "Базовый смысловой поиск встроен. Эти файлы — английская модель для более точного поиска по смыслу; для русского используйте многоязычную модель выше.",
   "Theme": "Тема",
   "this sheet": "эта справка",
   "This will delete your index and settings and restart Kensaku.": "Индекс и настройки будут удалены, Kensaku перезапустится.",

@@ -63,25 +63,62 @@ impl StaticTable {
     /// [`crate::config::KensakuConfig::semantic_f32_table`] for a persisted
     /// switch.
     pub fn load_with_f32(dir: &Path, use_f32: bool) -> Option<Self> {
+        Self::load_checked(dir, use_f32).ok()
+    }
+
+    /// Like [`Self::load_with_f32`], but says why a table could not be loaded
+    /// (shown in Settings and Doctor instead of a generic "not found").
+    pub fn load_checked(dir: &Path, use_f32: bool) -> Result<Self, String> {
         let use_f32 = use_f32 || std::env::var_os("KENSAKU_F32_TABLE").is_some();
-        let mut file = File::open(dir.join("model.safetensors")).ok()?;
-        let (embeddings, vocab_size, dim) = parse_safetensors(&mut file)?;
+        let model_path = dir.join("model.safetensors");
+        let mut file = File::open(&model_path)
+            .map_err(|e| format!("cannot open {}: {e}", model_path.display()))?;
+        const BAD_MATRIX: &str = "model.safetensors has no usable 2-D F32/F16 embedding tensor";
+        // Default: quantize while reading, so the f32 matrix is never held.
+        let (embeddings, embeddings_i8, embedding_scales, vocab_size, dim) = if use_f32 {
+            let (e, rows, dim) = parse_safetensors(&mut file).ok_or(BAD_MATRIX)?;
+            (e, Vec::new(), Vec::new(), rows, dim)
+        } else {
+            let (q, scales, rows, dim) = parse_safetensors_quantized(&mut file).ok_or(BAD_MATRIX)?;
+            (Vec::new(), q, scales, rows, dim)
+        };
+        drop(file);
         if dim != EMBEDDING_DIM {
-            return None;
+            return Err(format!("embedding width is {dim}, expected {EMBEDDING_DIM}"));
         }
 
-        let tokenizer_bytes = std::fs::read(dir.join("tokenizer.json")).ok()?;
-        let tokenizer: Value = serde_json::from_slice(&tokenizer_bytes).ok()?;
+        let tokenizer_path = dir.join("tokenizer.json");
+        let tokenizer_bytes = std::fs::read(&tokenizer_path)
+            .map_err(|e| format!("cannot read {}: {e}", tokenizer_path.display()))?;
+        let tokenizer: Value = serde_json::from_slice(&tokenizer_bytes)
+            .map_err(|e| format!("tokenizer.json is not valid JSON: {e}"))?;
         drop(tokenizer_bytes);
         // BERT WordPiece models (potion-base-8M) keep the original, tested
         // path; anything else (XLM-R SentencePiece in potion-multilingual)
         // goes through the generic HuggingFace pipeline.
         let (tokenizer_parts, hf) = if is_bert_wordpiece(&tokenizer) {
-            (parse_tokenizer(&tokenizer, vocab_size)?, None)
+            (
+                parse_tokenizer(&tokenizer, vocab_size)
+                    .ok_or("tokenizer.json: unusable WordPiece vocabulary")?,
+                None,
+            )
         } else {
-            let hf = crate::embed::hf_tokenizer::HfTokenizer::parse(&tokenizer)?;
-            if hf.vocab_size > vocab_size {
-                return None;
+            let hf = crate::embed::hf_tokenizer::HfTokenizer::parse(&tokenizer).ok_or_else(|| {
+                format!(
+                    "tokenizer.json: unsupported tokenizer ({})",
+                    crate::embed::hf_tokenizer::describe(&tokenizer)
+                )
+            })?;
+            // A tokenizer may list a few more ids than the matrix has rows
+            // (potion-multilingual-128M: 500 353 rows, special tokens <s>,
+            // </s>, <unk>, <pad>, <mask> at 500 353..=500 357). Those ids are
+            // simply skipped when pooling; only a vocabulary that mostly falls
+            // outside the matrix means the two files do not belong together.
+            if hf.vocab_size > vocab_size + vocab_size / 100 + 64 {
+                return Err(format!(
+                    "tokenizer has {} ids but the embedding matrix only {} rows",
+                    hf.vocab_size, vocab_size
+                ));
             }
             (
                 TokenizerParts {
@@ -107,7 +144,7 @@ impl StaticTable {
                         .and_then(|v| v.as_u64())
                         && size as usize != dim
                     {
-                        return None;
+                        return Err(format!("config.json hidden size {size} != {dim}"));
                     }
                     config
                         .get("normalize")
@@ -120,17 +157,7 @@ impl StaticTable {
             Err(_) => true,
         };
 
-        let (embeddings, embeddings_i8, embedding_scales) = if use_f32 {
-            (embeddings, Vec::new(), Vec::new())
-        } else {
-            // Quantize first, then drop the f32 matrix before returning so the
-            // startup peak does not retain both representations.
-            let (quantized, scales) = quantize(&embeddings, dim);
-            drop(embeddings);
-            (Vec::new(), quantized, scales)
-        };
-
-        Some(Self {
+        Ok(Self {
             embeddings,
             embeddings_i8,
             embedding_scales,
@@ -170,8 +197,9 @@ impl StaticTable {
         if let Some(hf) = &self.hf {
             // model2vec drops the unknown token before mean pooling.
             let unk = hf.unk_id();
+            let rows = self.embedding_scales.len().max(self.embeddings.len() / self.dim.max(1));
             let mut ids = hf.encode(text, MAX_TOKENS);
-            ids.retain(|id| Some(*id) != unk);
+            ids.retain(|id| Some(*id) != unk && (*id as usize) < rows);
             return ids;
         }
         let mut ids = Vec::new();
@@ -490,8 +518,17 @@ fn parse_tokenizer(value: &Value, vocab_size: usize) -> Option<TokenizerParts> {
     })
 }
 
-/// Parses one safetensors file and returns `(embeddings, vocab_size, dim)`.
-fn parse_safetensors<R: Read + Seek>(reader: &mut R) -> Option<(Vec<f32>, usize, usize)> {
+/// Location of the embedding matrix inside a safetensors file.
+struct TensorLayout {
+    half: bool,
+    rows: usize,
+    dim: usize,
+    /// Absolute byte offset of the first element.
+    offset: u64,
+}
+
+/// Reads the safetensors header and finds the `[vocab, dim]` matrix.
+fn safetensors_layout<R: Read + Seek>(reader: &mut R) -> Option<TensorLayout> {
     let mut length_bytes = [0u8; 8];
     reader.read_exact(&mut length_bytes).ok()?;
     let header_len = u64::from_le_bytes(length_bytes);
@@ -551,28 +588,62 @@ fn parse_safetensors<R: Read + Seek>(reader: &mut R) -> Option<(Vec<f32>, usize,
     }
 
     let data_start = 8u64.checked_add(header_len as u64)?;
-    reader
-        .seek(SeekFrom::Start(data_start.checked_add(begin)?))
-        .ok()?;
+    Some(TensorLayout {
+        half: dtype == "F16",
+        rows: vocab_size,
+        dim,
+        offset: data_start.checked_add(begin)?,
+    })
+}
 
-    let mut raw = vec![0u8; expected as usize];
-    reader.read_exact(&mut raw).ok()?;
+/// Parses one safetensors file and returns `(embeddings, vocab_size, dim)`.
+fn parse_safetensors<R: Read + Seek>(reader: &mut R) -> Option<(Vec<f32>, usize, usize)> {
+    let layout = safetensors_layout(reader)?;
+    reader.seek(SeekFrom::Start(layout.offset)).ok()?;
+    let mut embeddings = Vec::with_capacity(layout.rows * layout.dim);
+    let mut row = vec![0f32; layout.dim];
+    for _ in 0..layout.rows {
+        read_row(reader, layout.half, &mut row)?;
+        embeddings.extend_from_slice(&row);
+    }
+    Some((embeddings, layout.rows, layout.dim))
+}
 
-    let embeddings = if dtype == "F32" {
-        raw.as_chunks::<4>()
-            .0
-            .iter()
-            .map(|c| f32::from_le_bytes(*c))
-            .collect()
+/// Reads the matrix straight into the i8 representation, one row at a time,
+/// so a large table (potion-multilingual-128M: 512 MB of f32) never sits in
+/// memory as f32. Returns `(quantized, scales, rows, dim)`.
+fn parse_safetensors_quantized<R: Read + Seek>(
+    reader: &mut R,
+) -> Option<(Vec<i8>, Vec<f32>, usize, usize)> {
+    let layout = safetensors_layout(reader)?;
+    reader.seek(SeekFrom::Start(layout.offset)).ok()?;
+    let mut quantized = Vec::with_capacity(layout.rows * layout.dim);
+    let mut scales = Vec::with_capacity(layout.rows);
+    let mut row = vec![0f32; layout.dim];
+    for _ in 0..layout.rows {
+        read_row(reader, layout.half, &mut row)?;
+        let (q, scale) = quantize(&row, layout.dim);
+        quantized.extend_from_slice(&q);
+        scales.extend_from_slice(&scale);
+    }
+    Some((quantized, scales, layout.rows, layout.dim))
+}
+
+fn read_row<R: Read>(reader: &mut R, half: bool, row: &mut [f32]) -> Option<()> {
+    let item = if half { 2 } else { 4 };
+    let mut raw = [0u8; 4 * EMBEDDING_DIM];
+    let raw = raw.get_mut(..row.len() * item)?;
+    reader.read_exact(raw).ok()?;
+    if half {
+        for (dst, c) in row.iter_mut().zip(raw.as_chunks::<2>().0) {
+            *dst = f16_to_f32(u16::from_le_bytes(*c));
+        }
     } else {
-        raw.as_chunks::<2>()
-            .0
-            .iter()
-            .map(|c| f16_to_f32(u16::from_le_bytes(*c)))
-            .collect()
-    };
-
-    Some((embeddings, vocab_size, dim))
+        for (dst, c) in row.iter_mut().zip(raw.as_chunks::<4>().0) {
+            *dst = f32::from_le_bytes(*c);
+        }
+    }
+    Some(())
 }
 
 fn tensor_info(value: &Value) -> Option<(String, Vec<usize>, u64, u64)> {
@@ -896,6 +967,60 @@ mod tests {
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
 
         assert!(StaticTable::load(&dir).is_none());
+        let reason = StaticTable::load_checked(&dir, false).unwrap_err();
+        assert!(reason.contains("model.safetensors"), "{reason}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// potion-multilingual-128M ships 500 353 embedding rows but its XLM-R
+    /// tokenizer lists five special tokens after them. The table must load
+    /// and skip those ids instead of rejecting the model.
+    #[test]
+    fn sentencepiece_table_loads_with_special_ids_past_the_matrix() {
+        let dir = temp_dir("xlmr-extra-ids");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pieces = ["[PAD]", "[UNK]", "▁", "▁договор", "а", "▁лицензи", "я"];
+        let rows = pieces.len();
+        let mut data = Vec::new();
+        for r in 0..rows {
+            for d in 0..EMBEDDING_DIM {
+                let v: f32 = if d == r { 1.0 } else { 0.0 };
+                data.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        std::fs::write(
+            dir.join("model.safetensors"),
+            safetensors_bytes("F32", &[rows, EMBEDDING_DIM], &data),
+        )
+        .unwrap();
+        let mut vocab: Vec<Value> = pieces
+            .iter()
+            .enumerate()
+            .map(|(i, p)| serde_json::json!([p, -(i as f64)]))
+            .collect();
+        for special in ["<s>", "</s>", "<unk>", "<pad>", "<mask>"] {
+            vocab.push(serde_json::json!([special, 0.0]));
+        }
+        let tokenizer = serde_json::json!({
+            "normalizer": {"type": "Sequence", "normalizers": [
+                {"type": "Sequence", "normalizers": [
+                    {"type": "Precompiled", "precompiled_charsmap": "AAAA"},
+                    {"type": "Replace", "pattern": {"Regex": " {2,}"}, "content": " "}
+                ]}
+            ]},
+            "pre_tokenizer": {"type": "Metaspace", "replacement": "▁", "prepend_scheme": "always", "split": true},
+            "model": {"type": "Unigram", "unk_id": 1, "vocab": vocab}
+        });
+        std::fs::write(dir.join("tokenizer.json"), tokenizer.to_string()).unwrap();
+        std::fs::write(dir.join("config.json"), br#"{"hidden_dim": 256, "normalize": true}"#).unwrap();
+
+        let table = StaticTable::load_checked(&dir, false).expect("loads");
+        let ids = table.token_ids("договора <s>");
+        assert!(ids.iter().all(|&id| (id as usize) < rows), "{ids:?}");
+        assert!(ids.contains(&3), "{ids:?}");
+        let v = table.embed("договора");
+        assert!(v.iter().any(|x| *x > 0.0));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -153,8 +153,7 @@ export function ModelFilesCard() {
 
       {/* Honest note. */}
       <p className="border-t border-line bg-accent-soft px-4 py-2.5 text-[12px] leading-[18px] text-muted">
-        The default semantic tier is built in. These files pre-fetch the optional neural tier for
-        offline use.
+        {t("The default semantic tier is built in. These files pre-fetch the optional neural tier for offline use.")}
       </p>
     </Card>
   );
