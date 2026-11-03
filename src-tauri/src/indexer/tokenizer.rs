@@ -255,6 +255,82 @@ pub fn kensaku_analyzer() -> TextAnalyzer {
         .build()
 }
 
+/// Keeps only the tokens [`RussianMorphology`] would change: all-Cyrillic
+/// words whose stem differs from the lowercased word as written.
+///
+/// The `filename` and `content` fields hold stems for Russian words, so a
+/// regex such as `/договор(а|ы)/` has no term to match there. These surface
+/// forms go to a small side field that regex queries also search. Every other
+/// token (Latin, numbers, CJK, Russian words that are their own stem) is
+/// already indexed verbatim in the main fields and is dropped here, so the
+/// side field costs nothing for non-Russian text.
+#[derive(Clone, Copy, Default)]
+pub struct InflectedSurfaceOnly;
+
+impl TokenFilter for InflectedSurfaceOnly {
+    type Tokenizer<T: Tokenizer> = InflectedSurfaceFilter<T>;
+
+    fn transform<T: Tokenizer>(self, tokenizer: T) -> InflectedSurfaceFilter<T> {
+        InflectedSurfaceFilter { inner: tokenizer }
+    }
+}
+
+#[derive(Clone)]
+pub struct InflectedSurfaceFilter<T> {
+    inner: T,
+}
+
+impl<T: Tokenizer> Tokenizer for InflectedSurfaceFilter<T> {
+    type TokenStream<'a> = InflectedSurfaceStream<T::TokenStream<'a>>;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        InflectedSurfaceStream {
+            tail: self.inner.token_stream(text),
+            stemmer: Stemmer::create(Algorithm::Russian),
+        }
+    }
+}
+
+pub struct InflectedSurfaceStream<T> {
+    tail: T,
+    stemmer: Stemmer,
+}
+
+impl<T: TokenStream> TokenStream for InflectedSurfaceStream<T> {
+    fn advance(&mut self) -> bool {
+        while self.tail.advance() {
+            let text = &self.tail.token().text;
+            if text.is_empty() || !text.chars().all(is_cyrillic) {
+                continue;
+            }
+            let folded = text.replace('ё', "е");
+            let stem = self.stemmer.stem(&folded);
+            if !stem.is_empty() && stem.as_ref() != text.as_str() {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn token(&self) -> &Token {
+        self.tail.token()
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        self.tail.token_mut()
+    }
+}
+
+/// Analyzer for the regex side field: same tokenization and case folding as
+/// [`kensaku_analyzer`], but it emits only inflected Russian surface forms.
+pub fn kensaku_surface_analyzer() -> TextAnalyzer {
+    TextAnalyzer::builder(KensakuTokenizer::default())
+        .filter(RemoveLongFilter::limit(40))
+        .filter(LowerCaser)
+        .filter(InflectedSurfaceOnly)
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,6 +537,19 @@ mod tests {
         assert_eq!(tokens[0].offset_from, 0);
         assert_eq!(tokens[0].offset_to, "Договорами".len());
         assert_eq!(tokens[1].text, "solar");
+    }
+
+    #[test]
+    fn surface_analyzer_keeps_only_inflected_russian_forms() {
+        let mut analyzer = kensaku_surface_analyzer();
+        let mut stream = analyzer.token_stream("Договорами договор Отчёт Kaspersky v2 2026г");
+        let mut out = Vec::new();
+        while stream.advance() {
+            out.push(stream.token().text.clone());
+        }
+        // "договор" is its own stem and "2026г" is not all-Cyrillic: both are
+        // already verbatim in the main field. "отчёт" stems to "отчет".
+        assert_eq!(out, vec!["договорами", "отчёт"]);
     }
 
     #[test]

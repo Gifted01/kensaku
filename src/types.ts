@@ -95,6 +95,8 @@ export interface Alias {
 export interface SearchResponse {
   results: SearchResult[];
   interpretation?: InterpretationChip[];
+  /** The interpreted query matched nothing; results are for the words as typed. */
+  literal_fallback?: boolean;
   facets?: Facets;
   seq: number;
   active_filters: ActiveFilter[];

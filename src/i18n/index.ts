@@ -113,6 +113,11 @@ export function t(source: string, vars?: Record<string, string | number>): strin
   return interpolate(text, vars);
 }
 
+/** True when the current language has its own text for `source`. */
+export function hasTranslation(source: string): boolean {
+  return DICTIONARIES[current]?.[source] !== undefined;
+}
+
 /** Russian plural category: 0 = one (1, 21), 1 = few (2–4, 22–24), 2 = many. */
 export function ruPluralIndex(n: number): 0 | 1 | 2 {
   const abs = Math.abs(Math.trunc(n));

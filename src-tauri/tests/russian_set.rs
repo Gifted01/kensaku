@@ -51,6 +51,16 @@ const DOCS: &[(&str, &str, u64)] = &[
         2,
     ),
     (
+        "Сканы/фото паспорта.pdf",
+        "Скан паспорта гражданина, разворот с фотографией.",
+        30,
+    ),
+    (
+        "notes/log rotation.md",
+        "Rotation policy for server journals: keep fourteen days.",
+        20,
+    ),
+    (
         "notes/english notes.md",
         "Database indexing improves query performance. Invoice tracking.",
         5,
@@ -78,6 +88,14 @@ const QUERIES: &[(&str, &str)] = &[
     ("ошибка сертификат", "скриншот ошибки"),
     // English still works.
     ("database indexing", "english notes"),
+    // Regex sees inflected words as written (the index holds stems).
+    ("re:\"поставке\"", "Договор поставки"),
+    ("re:\"лицензи(й|и)\"", "Договор поставки"),
+    // An interpretation that filters everything out falls back to the
+    // words as typed: no image is about a passport, no .log file is
+    // about rotation.
+    ("фото паспорта", "фото паспорта"),
+    ("log rotation", "log rotation"),
 ];
 
 struct Corpus {
@@ -220,4 +238,50 @@ fn russian_intent_is_reported_as_chips() {
     // Only the recent screenshot qualifies: type:image and the 7-day window.
     assert_eq!(response.results.len(), 1, "{:?}", response.results);
     assert!(response.results[0].filename.contains("скриншот"));
+}
+
+#[test]
+fn empty_interpretation_falls_back_to_the_words_as_typed() {
+    let corpus = setup();
+    let aliases = KensakuConfig::default().alias_pairs();
+    let search = |query: &str| {
+        SearchDispatcher::search_response_fast_sorted_with_snippets(
+            query,
+            &corpus.metadata,
+            &corpus.content,
+            Some(&corpus.units),
+            true,
+            10,
+            1,
+            SortOrder::Best,
+            &aliases,
+            0,
+            false,
+        )
+    };
+
+    let response = search("log rotation");
+    assert!(response.literal_fallback, "{:?}", response.interpretation);
+    assert!(response.interpretation.iter().any(|c| c.raw == "ext:log"));
+    assert!(response.results[0].filename.contains("log rotation"));
+
+    // A reading that does match keeps its filters.
+    let response = search("скриншоты за прошлую неделю");
+    assert!(!response.literal_fallback);
+    assert_eq!(response.results.len(), 1, "{:?}", response.results);
+
+    // Nothing as typed either: the interpreted (empty) answer is kept, chips
+    // included, so the user sees what was tried.
+    let response = search("logs xqzvw");
+    assert!(
+        !response.literal_fallback,
+        "{:?}",
+        response
+            .results
+            .iter()
+            .map(|r| (&r.filename, r.score))
+            .collect::<Vec<_>>()
+    );
+    assert!(response.results.is_empty());
+    assert!(!response.interpretation.is_empty());
 }
